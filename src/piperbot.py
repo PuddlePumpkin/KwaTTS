@@ -559,7 +559,7 @@ async def removeacronym(interaction: discord.Interaction, acronym: str):
         )
 
 DEFAULT_USER_CONFIG = {
-    "modelselection": r"C:\Users\keira\Desktop\Github\Piperbot\piper\models\kristin\medium\en_US-kristin-medium.onnx",
+    "modelselection": r"C:\Users\keira\Desktop\Github\KwaTTS\piper\models\kristin\medium\en_US-kristin-medium.onnx",
     "modelspeaker": 1,
     "randomspeaker": False,
     "selectedmaxspeakers": 1,
