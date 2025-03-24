@@ -1,0 +1,10 @@
+discord.py[voice]
+asyncio
+soundfile
+llvmlite==0.41.0
+numba==0.58.0
+numpy>=1.25,<1.26
+resampy
+soundfile
+edge-tts
+gTTS

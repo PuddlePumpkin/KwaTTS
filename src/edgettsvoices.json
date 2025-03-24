@@ -1,0 +1,227 @@
+{
+  "en-AU-NatashaNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-AU-WilliamNeural": {
+    "gender": "Male",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-CA-ClaraNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-CA-LiamNeural": {
+    "gender": "Male",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-GB-LibbyNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-GB-MaisieNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-GB-RyanNeural": {
+    "gender": "Male",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-GB-SoniaNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-GB-ThomasNeural": {
+    "gender": "Male",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-HK-SamNeural": {
+    "gender": "Male",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-HK-YanNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-IE-ConnorNeural": {
+    "gender": "Male",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-IE-EmilyNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-IN-NeerjaExpressiveNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-IN-NeerjaNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-IN-PrabhatNeural": {
+    "gender": "Male",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-KE-AsiliaNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-KE-ChilembaNeural": {
+    "gender": "Male",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-NG-AbeoNeural": {
+    "gender": "Male",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-NG-EzinneNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-NZ-MitchellNeural": {
+    "gender": "Male",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-NZ-MollyNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-PH-JamesNeural": {
+    "gender": "Male",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-PH-RosaNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-SG-LunaNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-SG-WayneNeural": {
+    "gender": "Male",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-TZ-ElimuNeural": {
+    "gender": "Male",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-TZ-ImaniNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Positive"
+  },
+  "en-US-AnaNeural": {
+    "gender": "Female",
+    "voice_type": "Cartoon, Conversation",
+    "personality_properties": "Cute"
+  },
+  "en-US-AndrewMultilingualNeural": {
+    "gender": "Male",
+    "voice_type": "Conversation, Copilot",
+    "personality_properties": "Warm, Confident, Authentic, Honest"
+  },
+  "en-US-AndrewNeural": {
+    "gender": "Male",
+    "voice_type": "Conversation, Copilot",
+    "personality_properties": "Warm, Confident, Authentic, Honest"
+  },
+  "en-US-AriaNeural": {
+    "gender": "Female",
+    "voice_type": "News, Novel",
+    "personality_properties": "Positive, Confident"
+  },
+  "en-US-AvaMultilingualNeural": {
+    "gender": "Female",
+    "voice_type": "Conversation, Copilot",
+    "personality_properties": "Expressive, Caring, Pleasant, Friendly"
+  },
+  "en-US-AvaNeural": {
+    "gender": "Female",
+    "voice_type": "Conversation, Copilot",
+    "personality_properties": "Expressive, Caring, Pleasant, Friendly"
+  },
+  "en-US-BrianMultilingualNeural": {
+    "gender": "Male",
+    "voice_type": "Conversation, Copilot",
+    "personality_properties": "Approachable, Casual, Sincere"
+  },
+  "en-US-BrianNeural": {
+    "gender": "Male",
+    "voice_type": "Conversation, Copilot",
+    "personality_properties": "Approachable, Casual, Sincere"
+  },
+  "en-US-ChristopherNeural": {
+    "gender": "Male",
+    "voice_type": "News, Novel",
+    "personality_properties": "Reliable, Authority"
+  },
+  "en-US-EmmaMultilingualNeural": {
+    "gender": "Female",
+    "voice_type": "Conversation, Copilot",
+    "personality_properties": "Cheerful, Clear, Conversational"
+  },
+  "en-US-EmmaNeural": {
+    "gender": "Female",
+    "voice_type": "Conversation, Copilot",
+    "personality_properties": "Cheerful, Clear, Conversational"
+  },
+  "en-US-EricNeural": {
+    "gender": "Male",
+    "voice_type": "News, Novel",
+    "personality_properties": "Rational"
+  },
+  "en-US-GuyNeural": {
+    "gender": "Male",
+    "voice_type": "News, Novel",
+    "personality_properties": "Passion"
+  },
+  "en-US-JennyNeural": {
+    "gender": "Female",
+    "voice_type": "General",
+    "personality_properties": "Friendly, Considerate, Comfort"
+  },
+  "en-US-MichelleNeural": {
+    "gender": "Female",
+    "voice_type": "News, Novel",
+    "personality_properties": "Friendly, Pleasant"
+  },
+  "en-US-RogerNeural": {
+    "gender": "Male",
+    "voice_type": "News, Novel",
+    "personality_properties": "Lively"
+  },
+  "en-US-SteffanNeural": {
+    "gender": "Male",
+    "voice_type": "News, Novel",
+    "personality_properties": "Rational"
+  }
+}
