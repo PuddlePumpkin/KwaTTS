@@ -354,13 +354,13 @@ async def process_queue():
                     global IS_PLAYING
                     IS_PLAYING = False
                     if error:
-                        print(f"Playback error for '{task['content'][:50]}...': {error}")
+                        print(f"Playback error for \"{task['content'][:50]}\"...: {error}")
                         if task["retry_count"] < 3:
                             task["retry_count"] += 1
                             new_future = asyncio.create_task(generate_audio(task))
                             tts_queue.insert(0, (task, new_future))
                         else:
-                            print(f"Task '{task['content'][:50]}...' exceeded retry limit, skipping")
+                            print(f"Task \"{task['content'][:50]}\"... exceeded retry limit, skipping")
                     else:
                         output_file = task.get("debug_mp3") or task.get("debug_wav")
                         if output_file and os.path.exists(output_file):
@@ -370,16 +370,16 @@ async def process_queue():
                                 print(f"Cleanup error: {str(e)}")
                     asyncio.run_coroutine_threadsafe(process_queue(), bot.loop)
                 voice_client.play(source, after=cleanup)
-                print(f"Now playing: {task['content'][:50]}...")
+                print(f"Now playing: \"{task['content'][:50]}\"...")
             except Exception as e:
-                print(f"Error generating audio for '{task['content'][:50]}...': {str(e)}")
+                print(f"Error generating audio for \"{task['content'][:50]}\"...': {str(e)}")
                 traceback.print_exc()
                 if task["retry_count"] < 3:
                     task["retry_count"] += 1
                     new_future = asyncio.create_task(generate_audio(task))
                     tts_queue.insert(0, (task, new_future))
                 else:
-                    print(f"Task '{task['content'][:50]}...' exceeded retry limit, skipping")
+                    print(f"Task \"{task['content'][:50]}\" exceeded retry limit, skipping")
                 IS_PLAYING = False
                 await asyncio.sleep(0.1)
 
