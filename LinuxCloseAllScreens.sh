@@ -1,21 +1,14 @@
 #!/bin/bash
-# Script to safely kill all detached screen sessions
+# Graceful shutdown script
 
-set -euo pipefail  # Enable strict error handling
+echo "Sending shutdown signals to KwaTtsProcess..."
+screen -S KwaTtsProcess -X stuff $'\003'  # Send Ctrl+C equivalent
+sleep 5  # Give it time to shutdown gracefully
 
-echo "Active screen sessions:"
-screen -ls
+# Force kill if still running after 5 seconds
+screen -ls | awk '/KwaTtsProcess/ {print $1}' | while read -r session; do
+    echo "Force terminating session: $session"
+    screen -XS "${session}" quit
+done
 
-read -p "Do you want to kill all DETACHED sessions? [y/N] " -n 1 -r
-echo  # Move to new line
-
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    # Safely get session list and terminate
-    screen -ls | awk '/Detached/ {print $1}' | while read -r session; do
-        echo "Killing session: $session"
-        screen -XS "${session}" quit
-    done
-    echo "All detached sessions terminated"
-else
-    echo "Aborted"
-fi
+echo "Shutdown complete"

@@ -10,10 +10,43 @@ import uuid
 import shutil
 import time
 import platform
+import signal
 from typing import List
 from pathlib import Path
 from discord.ext import commands
 from discord import app_commands
+
+def handle_shutdown(signum, frame):
+    """Handle shutdown signals gracefully"""
+    print(f"\nReceived shutdown signal {signum}, initiating graceful shutdown...")
+    
+    async def shutdown_sequence():
+        # Disconnect from voice if connected
+        if voice_client and voice_client.is_connected():
+            await voice_client.disconnect()
+            print("Disconnected from voice channel")
+            
+        # Close Discord connection
+        if not bot.is_closed():
+            await bot.close()
+            print("Closed Discord connection")
+            
+        # Cleanup any temporary files
+        for file in Path(".").glob("temp_*.mp3"):
+            try:
+                file.unlink()
+                print(f"Cleaned up temp file: {file}")
+            except Exception as e:
+                print(f"Error cleaning {file}: {str(e)}")
+        
+        sys.exit(0)
+
+    # Run the shutdown sequence in the event loop
+    asyncio.create_task(shutdown_sequence())
+
+# Register signal handlers
+signal.signal(signal.SIGINT, handle_shutdown)
+signal.signal(signal.SIGTERM, handle_shutdown)
 
 # ----------------- CONFIG LOADING -----------------
 def load_server_config():
@@ -583,4 +616,8 @@ def save_user_config(userid: str, config: dict):
 # Main Command
 # ----------------------------------
 if __name__ == '__main__':
-    bot.run(TOKEN)
+    try:
+        bot.run(TOKEN)
+    except KeyboardInterrupt:
+        print("Keyboard interrupt received, initiating shutdown...")
+        asyncio.run(handle_shutdown(None, None))
