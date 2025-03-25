@@ -1,2 +1,1 @@
-# PiperBot
- 
+# KwaTTS discord bot
