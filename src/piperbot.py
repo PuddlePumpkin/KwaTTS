@@ -457,6 +457,11 @@ async def on_message(message):
         if not processed_content.strip():
             return
 
+        # New check: Skip if no letters and no attachments
+        if (not re.search(r'[a-zA-Z]', processed_content, re.IGNORECASE) 
+            and not message.attachments):
+            return
+
         task = create_tts_task(processed_content, userconfig)
         future = asyncio.create_task(generate_audio(task))
         
