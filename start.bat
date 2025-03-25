@@ -32,14 +32,14 @@ goto :reqs
 
 :skip_venv
 :reqs
-if not defined PIPERREQDONE (set PIPERREQDONE=FALSE)
-if %PIPERREQDONE% == TRUE goto :launch
+if not defined KWAREQDONE (set KWAREQDONE=FALSE)
+if %KWAREQDONE% == TRUE goto :launch
 
 %PIP% install -r %~dp0/src/requirements.txt --upgrade
-setx PIPERREQDONE TRUE 
+setx KWAREQDONE TRUE 
 goto :launch
 :launch
-%PYTHON% %~dp0/src/piperbot.py %*
+%PYTHON% %~dp0/src/KwaTTS.py %*
 pause
 exit /b
 

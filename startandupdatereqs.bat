@@ -1,4 +1,4 @@
 @echo off
-setx PIPERREQDONE FALSE
-set PIPERREQDONE=FALSE
+setx KWAREQDONE FALSE
+set KWAREQDONE=FALSE
 %~dp0/start.bat

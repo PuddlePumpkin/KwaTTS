@@ -23,8 +23,6 @@ def load_server_config():
                 "token": config["token"],
                 "text_channel_id": config["text_channel_id"],
                 "voice_channel_id": config["voice_channel_id"],
-                "piper_path": config["piper_path"],
-                "model_path": config["model_path"],
                 "guild_id": config["guild_id"]
             }
     except FileNotFoundError:
@@ -43,8 +41,6 @@ try:
     TOKEN = config["token"]
     TEXT_CHANNEL_ID = config["text_channel_id"]
     VOICE_CHANNEL_ID = config["voice_channel_id"]
-    PIPER_PATH = config["piper_path"]
-    MODEL_PATH = config["model_path"]
     GUILD_ID = config["guild_id"]
 except Exception as e:
     sys.exit(f"❌ Config loading failed: {e}")
@@ -62,62 +58,6 @@ IS_PLAYING = False
 ACRONYM_CACHE = None
 ACRONYM_LAST_MODIFIED = 0
 
-# ----------------------------------
-# Get list of models
-# ----------------------------------
-MODEL_SEARCH_DIR = Path("./piper/models")
-
-def populate_model_dict():
-    global model_dict
-    try:
-        if not MODEL_SEARCH_DIR.exists():
-            raise FileNotFoundError(f"Model directory not found: {MODEL_SEARCH_DIR.resolve()}")
-            
-        model_dict = {
-            file.stem: str(file.resolve())
-            for file in MODEL_SEARCH_DIR.rglob("*.[oO][nN][nN][xX]")
-            if file.is_file()
-        }
-        
-        if not model_dict:
-            raise ValueError(f"No .onnx files found in {MODEL_SEARCH_DIR.resolve()}")
-            
-        print(f"Loaded {len(model_dict)} voice models")
-        
-    except Exception as e:
-        print(f"Error loading models: {str(e)}")
-        traceback.print_exc()
-        model_dict = {}
-
-# ----------------------------------
-# Change Voice Command
-# ----------------------------------
-@bot.tree.command(name="changevoice", description="Set your Piper voice model and sub-voice", guild=discord.Object(id=GUILD_ID))
-@app_commands.describe(model="The voice model to use", sub_voice="The sub-voice number (integer)")
-async def changevoice(interaction: discord.Interaction, model: str, sub_voice: int = 1):
-    global model_dict
-    userconfig = load_user_config(str(interaction.user.id))
-    with open(str(model_dict[model] + '.json'), 'r', encoding='utf-8') as openfile:
-        modeljson = json.load(openfile)
-        openfile.close()
-    if sub_voice > modeljson["num_speakers"] or sub_voice < 1:
-        await interaction.response.send_message(f"SPEAKER NUMBER NOT VALID, MAX IS {modeljson['num_speakers']}", ephemeral=True)
-        return
-    await interaction.response.send_message(f"Voice set to {model} (sub-voice {sub_voice})", ephemeral=True)
-    userconfig["modelselection"] = model_dict[model]
-    userconfig["modelspeaker"] = sub_voice
-    userconfig["selectedmaxspeakers"] = modeljson["num_speakers"]
-    userconfig["service"] = "piper"  # Set service to piper
-    save_user_config(str(interaction.user.id), userconfig)
-
-@changevoice.autocomplete("model")
-async def model_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
-    global model_dict
-    return [
-        app_commands.Choice(name=model, value=model)
-        for model in model_dict
-        if current.lower() in model.lower()
-    ][:25]
 
 # ----------------------------------
 # Change Voice Edge Command
@@ -245,14 +185,6 @@ async def changevoicegtts(interaction: discord.Interaction, tldendpoint: str = "
     )
 
     
-# ----------------------------------
-# Validate Paths
-# ----------------------------------
-if not os.path.isfile(PIPER_PATH):
-    sys.exit(f"❌ Missing Piper: {PIPER_PATH}")
-if not os.path.isfile(MODEL_PATH):
-    sys.exit(f"❌ Missing Model: {MODEL_PATH}")
-
 def windows_escape(text):
     return text.replace('"', '""').replace('^', '^^').replace('&', '^&')
 
@@ -274,15 +206,13 @@ async def generate_audio(task: dict) -> discord.FFmpegPCMAudio:
     start_time = time.time()
     safe_message = windows_escape(task["content"])
     output_file = task.get("debug_mp3") or task.get("debug_wav")
-    service = task.get("service", "piper")
+    service = task.get("service", "edge")
 
     try:
         if service == "gtts":
             command = build_gtts_command(task, safe_message)
         elif service == "edge":
             command = build_edge_command(task, safe_message)
-        else:
-            command = build_piper_command(task, safe_message)
 
         proc = await asyncio.create_subprocess_shell(
             command,
@@ -327,18 +257,6 @@ def build_edge_command(task: dict, safe_message: str) -> str:
         f'--write-media "{task["debug_mp3"]}"'
     )
 
-def build_piper_command(task: dict, safe_message: str) -> str:
-    """Build Piper command with model validation"""
-    model_path = Path(task["piper_model"])
-    if not model_path.exists():
-        raise FileNotFoundError(f"Piper model not found: {model_path}")
-    
-    return (
-        f'echo "{safe_message}" | '
-        f'"{PIPER_PATH}" --model "{model_path}" '
-        f'--output_file "{task["debug_wav"]}" '
-        f'--speaker {task["piper_speaker"]}'
-    )
 
 async def process_queue():
     global IS_PLAYING
@@ -498,7 +416,7 @@ def clean_special_content(content: str) -> str:
 
 def create_tts_task(content: str, config: dict) -> dict:
     unique_id = uuid.uuid4().hex
-    service = config.get("service", "piper")
+    service = config.get("service", "edge")
     
     task = {
         "id": unique_id,
@@ -519,12 +437,6 @@ def create_tts_task(content: str, config: dict) -> dict:
             "edge_voice": config.get("selected_edge_voice"),
             "edgepitch": config.get("edgepitch", 0),
             "edgevolume": config.get("edgevolume", 0)
-        })
-    else:
-        task.update({
-            "debug_wav": f"temp_{unique_id}.wav",
-            "piper_model": config.get("modelselection"),
-            "piper_speaker": config.get("modelspeaker", 1)
         })
     
     return task
@@ -587,12 +499,8 @@ async def removeacronym(interaction: discord.Interaction, acronym: str):
         )
 
 DEFAULT_USER_CONFIG = {
-    "modelselection": r"C:\Users\keira\Desktop\Github\KwaTTS\piper\models\kristin\medium\en_US-kristin-medium.onnx",
-    "modelspeaker": 1,
-    "randomspeaker": False,
-    "selectedmaxspeakers": 1,
     "ignoreme": False,
-    "service": "piper",  # Unified service field
+    "service": "edge",  # Unified service field
     "gtts_tld": "us",
     "selected_edge_voice": None,
     "edgepitch": 0,
@@ -618,14 +526,20 @@ def load_user_config(userid: str) -> dict:
     if "usingedge" in user_config or "usinggtts" in user_config:
         if user_config.get("usingedge"):
             user_config["service"] = "edge"
-        elif user_config.get("usinggtts"):
-            user_config["service"] = "gtts"
         else:
-            user_config["service"] = "piper"
+            user_config["service"] = "gtts"
         
         # Remove old keys
         user_config.pop("usingedge", None)
         user_config.pop("usinggtts", None)
+    if "modelselection" in user_config:
+        user_config.pop("modelselection", None)
+    if "modelspeaker" in user_config:
+        user_config.pop("modelspeaker", None)
+    if "selectedmaxspeakers" in user_config:
+        user_config.pop("selectedmaxspeakers", None)
+    if "randomspeaker" in user_config:
+        user_config.pop("randomspeaker", None)
     
     return {
         **DEFAULT_USER_CONFIG,
@@ -648,5 +562,4 @@ def save_user_config(userid: str, config: dict):
 # Main Command
 # ----------------------------------
 if __name__ == '__main__':
-    populate_model_dict()
     bot.run(TOKEN)
