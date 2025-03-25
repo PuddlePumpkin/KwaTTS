@@ -9,6 +9,7 @@ import json
 import uuid
 import shutil
 import time
+import platform
 from typing import List
 from pathlib import Path
 from discord.ext import commands
@@ -243,14 +244,34 @@ async def generate_audio(task: dict) -> discord.FFmpegPCMAudio:
         print(f"Audio generation took: {time.time() - start_time:.2f}s")
 
 def build_gtts_command(task: dict, safe_message: str) -> str:
-    """Build gTTS CLI command with sanitization"""
+    """Build absolute path gTTS command with verification"""
     tld = task.get("tld", "com")
-    return f'gtts-cli "{safe_message}" --tld {tld} --output "{task["debug_mp3"]}"'
+    
+    # Get path to virtual environment
+    venv_path = Path(sys.executable).parent.parent
+    
+    # Platform-specific paths
+    if platform.system() == "Windows":
+        cli_path = venv_path / "Scripts" / "gtts-cli.exe"
+    else:
+        cli_path = venv_path / "bin" / "gtts-cli"
+    print(f"Final gtts-cli path: {cli_path}")  # Should show absolute path
+    print(f"File exists: {cli_path.exists()}")  # Must be True
+    # Verify executable exists
+    if not cli_path.exists():
+        raise RuntimeError(f"gtts-cli not found at {cli_path}\n"
+                          "Install with: pip install gtts")
+    
+    return (
+        f'"{cli_path}" "{safe_message}" '
+        f'--tld {tld} --output "{task["debug_mp3"]}"'
+    )
 
 def build_edge_command(task: dict, safe_message: str) -> str:
-    """Build edge-tts CLI command with pitch/volume controls"""
+    """Build edge-tts command that works on all platforms"""
     return (
-        f'edge-tts --pitch {task["edgepitch"]:+}Hz '
+        f'"{sys.executable}" -m edge_tts '
+        f'--pitch {task["edgepitch"]:+}Hz '
         f'--volume {task["edgevolume"]:+}% '
         f'--voice "{task["edge_voice"]}" '
         f'--text "{safe_message}" '
