@@ -433,7 +433,30 @@ async def on_message(message):
         processed_content = replace_mentions(processed_content, message.guild)
         processed_content = filter_acronyms(processed_content)
         processed_content = clean_special_content(processed_content)
-        
+
+        # Handle image and other file attachments
+        image_attachments = [
+            att for att in message.attachments 
+            if att.content_type and att.content_type.startswith('image/')
+        ]
+        member = message.guild.get_member(int(message.author.id))
+        display_name = member.display_name if member else "User"
+
+        if image_attachments:
+            if not processed_content.strip():
+                processed_content = f"{display_name} sent an image file"
+            else:
+                processed_content = f"{display_name} sent an image file and said... {processed_content}"
+        elif message.attachments:
+            if not processed_content.strip():
+                processed_content = f"{display_name} sent a file"
+            else:
+                processed_content = f"{display_name} sent a file and said... {processed_content}"
+
+        # Skip processing if content is empty after handling
+        if not processed_content.strip():
+            return
+
         task = create_tts_task(processed_content, userconfig)
         future = asyncio.create_task(generate_audio(task))
         
