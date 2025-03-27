@@ -16,37 +16,67 @@ from pathlib import Path
 from discord.ext import commands
 from discord import app_commands
 
-def handle_shutdown(signum, frame):
-    """Handle shutdown signals gracefully"""
-    print(f"\nReceived shutdown signal {signum}, initiating graceful shutdown...")
+async def graceful_shutdown(signame=None):
+    """Handle all shutdown tasks properly"""
+    print(f"\nInitiating graceful shutdown ({signame if signame else 'manual'})...")
     
-    async def shutdown_sequence():
-        # Disconnect from voice if connected
+    # Cleanup queued files
+    async with QUEUE_LOCK:
+        for task, future in tts_queue:
+            output_file = task.get("debug_mp3") or task.get("debug_wav")
+            if output_file and os.path.exists(output_file):
+                try:
+                    os.remove(output_file)
+                    print(f"Cleaned queued file: {output_file}")
+                except Exception as e:
+                    print(f"Error cleaning {output_file}: {str(e)}")
+        tts_queue.clear()
+    
+    # Disconnect from all voice channels
+    for guild in bot.guilds:
+        voice_client = guild.voice_client
         if voice_client and voice_client.is_connected():
             await voice_client.disconnect()
-            print("Disconnected from voice channel")
-            
-        # Close Discord connection
-        if not bot.is_closed():
-            await bot.close()
-            print("Closed Discord connection")
-            
-        # Cleanup any temporary files
-        for file in Path(".").glob("temp_*.mp3"):
-            try:
-                file.unlink()
-                print(f"Cleaned up temp file: {file}")
-            except Exception as e:
-                print(f"Error cleaning {file}: {str(e)}")
-        
-        sys.exit(0)
+            print(f"Disconnected from voice in {guild.name}")
+    
+    # Close Discord connection
+    if not bot.is_closed():
+        await bot.close()
+        print("Closed Discord connection")
+    
+    # Cleanup temporary files
+    for file in Path(".").glob("temp_*.mp3"):
+        try:
+            file.unlink()
+            print(f"Cleaned up temp file: {file}")
+        except Exception as e:
+            print(f"Error cleaning {file}: {str(e)}")
+    
+    # Exit the program
+    sys.exit(0)
 
-    # Run the shutdown sequence in the event loop
-    asyncio.create_task(shutdown_sequence())
-
-# Register signal handlers
-signal.signal(signal.SIGINT, handle_shutdown)
-signal.signal(signal.SIGTERM, handle_shutdown)
+def setup_signal_handlers():
+    """Register signal handlers with the event loop"""
+    loop = asyncio.get_event_loop()
+    signals = []
+    
+    # Platform-specific signal handling
+    if platform.system() == 'Windows':
+        signals = [signal.SIGINT]
+    else:
+        signals = [signal.SIGINT, signal.SIGTERM]
+    
+    for sig in signals:
+        try:
+            loop.add_signal_handler(
+                sig,
+                lambda sig=sig: asyncio.create_task(graceful_shutdown(sig.name))
+            )
+            print(f"Registered handler for {sig.name}")
+        except NotImplementedError:
+            print(f"Signal {sig.name} not supported on this platform")
+        except Exception as e:
+            print(f"Error registering handler for {sig.name}: {str(e)}")
 
 # ----------------- CONFIG LOADING -----------------
 def load_server_config():
@@ -181,9 +211,13 @@ async def join(interaction: discord.Interaction):
     await interaction.response.send_message(f"Requested join...", ephemeral=True)
     try:
         channel = bot.get_channel(VOICE_CHANNEL_ID)
-        global voice_client
         if channel:
-            voice_client = await channel.connect()
+            # Use guild's voice client instead of global
+            voice_client = interaction.guild.voice_client
+            if voice_client and voice_client.is_connected():
+                await voice_client.move_to(channel)
+            else:
+                voice_client = await channel.connect()
             print(f"Connected to voice: {channel.name}")
         else:
             print("❌ Voice channel not found")
@@ -198,6 +232,18 @@ async def leave(interaction: discord.Interaction):
     await interaction.response.send_message(f"Requested leave...", ephemeral=True)
     voice_client = interaction.guild.voice_client
     if voice_client and voice_client.is_connected():
+        # Clean up queued files before disconnecting
+        async with QUEUE_LOCK:
+            for task, future in tts_queue:
+                output_file = task.get("debug_mp3") or task.get("debug_wav")
+                if output_file and os.path.exists(output_file):
+                    try:
+                        os.remove(output_file)
+                        print(f"Cleaned queued file: {output_file}")
+                    except Exception as e:
+                        print(f"Error cleaning {output_file}: {str(e)}")
+            tts_queue.clear()
+        
         await voice_client.disconnect()
         print(f"✅ Left voice channel: {voice_client.channel.name}")
     else:
@@ -228,6 +274,8 @@ def windows_escape(text):
 @bot.event
 async def on_ready():
     print(f'Bot ready: {bot.user}')
+    setup_signal_handlers()
+    
     try:
         guild = discord.Object(id=GUILD_ID)
         print(f"Commands in tree: {[cmd.name for cmd in bot.tree.get_commands(guild=guild)]}")
@@ -316,6 +364,19 @@ async def process_queue():
     global IS_PLAYING
 
     async with QUEUE_LOCK:
+        voice_client = bot.get_guild(GUILD_ID).voice_client
+        if not voice_client or not voice_client.is_connected():
+            # Cleanup any remaining queue items
+            for task, future in tts_queue:
+                output_file = task.get("debug_mp3") or task.get("debug_wav")
+                if output_file and os.path.exists(output_file):
+                    try:
+                        os.remove(output_file)
+                    except Exception as e:
+                        print(f"Cleanup error: {str(e)}")
+            tts_queue.clear()
+            IS_PLAYING = False
+            return
         if tts_queue and not IS_PLAYING:
             IS_PLAYING = True
             task, future = tts_queue.pop(0)
@@ -619,5 +680,4 @@ if __name__ == '__main__':
     try:
         bot.run(TOKEN)
     except KeyboardInterrupt:
-        print("Keyboard interrupt received, initiating shutdown...")
-        asyncio.run(handle_shutdown(None, None))
+        asyncio.run(graceful_shutdown("SIGINT"))
