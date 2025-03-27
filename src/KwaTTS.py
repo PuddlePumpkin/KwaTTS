@@ -212,7 +212,13 @@ async def join(interaction: discord.Interaction):
     try:
         channel = bot.get_channel(VOICE_CHANNEL_ID)
         if channel:
-            # Use guild's voice client instead of global
+            # Check if there are any non-bot members in the target channel
+            human_members = [m for m in channel.members if not m.bot]
+            if not human_members:
+                await interaction.followup.send("Aborted join (No members present in the channel).", ephemeral=True)
+                return
+
+            # Proceed to connect or move
             voice_client = interaction.guild.voice_client
             if voice_client and voice_client.is_connected():
                 await voice_client.move_to(channel)
@@ -224,6 +230,7 @@ async def join(interaction: discord.Interaction):
     except Exception as e:
         print(f"❌ Voice connection failed: {e}")
 
+        
 # ----------------------------------
 # Leave Command
 # ----------------------------------
@@ -583,6 +590,37 @@ async def addacronym(interaction: discord.Interaction, acronym: str, translation
             f"❌ Error updating acronyms: {str(e)}", 
             ephemeral=True
         )
+
+# ----------------------------------
+# Voice state update event (for leaving empty channels)
+# ----------------------------------
+@bot.event
+async def on_voice_state_update(member, before, after):
+    # Ignore the bot's own voice state changes
+    if member == bot.user:
+        return
+
+    voice_client = member.guild.voice_client
+    if not voice_client or not voice_client.is_connected():
+        return
+
+    # Check if the user was in the bot's channel before the change
+    if before.channel and before.channel == voice_client.channel:
+        # Count human members excluding bots
+        human_members = [m for m in voice_client.channel.members if not m.bot]
+        if len(human_members) == 0:
+            # Disconnect and clean up
+            await voice_client.disconnect()
+            print("Left voice channel because it became empty.")
+            async with QUEUE_LOCK:
+                for task, future in tts_queue:
+                    output_file = task.get("debug_mp3") or task.get("debug_wav")
+                    if output_file and os.path.exists(output_file):
+                        try:
+                            os.remove(output_file)
+                        except Exception as e:
+                            print(f"Error cleaning file: {e}")
+                tts_queue.clear()
 
 # ----------------------------------
 # Remove Acronym Command
