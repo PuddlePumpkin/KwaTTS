@@ -129,7 +129,7 @@ MAX_RECONNECT_ATTEMPTS = 3
 VOICE_STATE_LOCK = None
 
 async def attempt_reconnection():
-    global CONNECTION_STATE, RECONNECT_ATTEMPTS
+    global CONNECTION_STATE, RECONNECT_ATTEMPTS, LAST_VOICE_CHANNEL, MAX_RECONNECT_ATTEMPTS
     
     async with VOICE_STATE_LOCK:
         if not CONNECTION_STATE or RECONNECT_ATTEMPTS >= MAX_RECONNECT_ATTEMPTS:
@@ -663,7 +663,7 @@ async def addacronym(interaction: discord.Interaction, acronym: str, translation
 # ----------------------------------
 @bot.event
 async def on_voice_state_update(member, before, after):
-    global CONNECTION_STATE
+    global CONNECTION_STATE, VOICE_STATE_LOCK, LAST_VOICE_CHANNEL, QUEUE_LOCK
     if member.id == bot.user.id:
         if before.channel and not after.channel:
             print("⚠️ Bot disconnected from voice channel")
