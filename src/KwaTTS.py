@@ -535,8 +535,7 @@ def filter_acronyms(content: str) -> str:
 # On Message Event
 # ----------------------------------
 def contains_code_block(content: str) -> bool:
-    """Check if message contains markdown code blocks"""
-    return re.search(r'```', content) is not None  # Simplified check
+    return re.search(r'```.*?```', content, flags=re.DOTALL) is not None
 
 @bot.event
 async def on_message(message):
