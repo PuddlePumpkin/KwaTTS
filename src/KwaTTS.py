@@ -577,7 +577,7 @@ async def on_message(message):
         file_count = len(file_attachments)
         code_count = 1 if has_code else 0
         total_attachments = image_count + file_count + code_count
-        is_long_message = len(processed_content) > 350
+        is_long_message = len(processed_content) > 400
 
         # Build specific description
         specific_attachment = None
