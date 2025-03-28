@@ -663,6 +663,7 @@ async def addacronym(interaction: discord.Interaction, acronym: str, translation
 # ----------------------------------
 @bot.event
 async def on_voice_state_update(member, before, after):
+    global CONNECTION_STATE
     if member.id == bot.user.id:
         if before.channel and not after.channel:
             print("⚠️ Bot disconnected from voice channel")
@@ -726,7 +727,7 @@ async def handle_reconnection_sequence():
                         print(f"Error cleaning file: {e}")
             tts_queue.clear()
 
-            
+
 # ----------------------------------
 # Remove Acronym Command
 # ----------------------------------
