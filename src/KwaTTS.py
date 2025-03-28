@@ -565,53 +565,49 @@ async def on_message(message):
         processed_content = clean_special_content(processed_content)
 
         # Attachment analysis
-        image_count = len([att for att in message.attachments 
-                         if att.content_type and att.content_type.startswith('image/')])
-        file_count = len([att for att in message.attachments 
-                        if not att.content_type or not att.content_type.startswith('image/')])
+        image_attachments = [att for att in message.attachments 
+                           if att.content_type and att.content_type.startswith('image/')]
+        file_attachments = [att for att in message.attachments 
+                          if att not in image_attachments]
         member = message.guild.get_member(int(message.author.id))
         display_name = member.display_name if member else "User"
 
-        # Build attachment description
-        attachment_types = []
-        if has_code:
-            attachment_types.append("code")
-        if image_count > 0:
-            attachment_types.append("image")
-        if file_count > 0:
-            attachment_types.append("file")
-
-        total_types = len(attachment_types)
+        # Attachment counts
+        image_count = len(image_attachments)
+        file_count = len(file_attachments)
+        code_count = 1 if has_code else 0
+        total_attachments = image_count + file_count + code_count
         is_long_message = len(processed_content) > 400
-        attachment_desc = ""
 
-        if total_types > 1:
-            attachment_desc = "multiple attachments"
-        elif total_types == 1:
-            att_type = attachment_types[0]
-            if att_type == "code":
-                attachment_desc = "a code block"
-            elif att_type == "image":
-                if image_count == 1:
-                    attachment_desc = "an image"
-                else:
-                    attachment_desc = "multiple images"
-            elif att_type == "file":
-                if file_count == 1:
-                    attachment_desc = "a file"
-                else:
-                    attachment_desc = "multiple files"
-
+        # Build specific description
+        specific_attachment = None
+        if total_attachments == 1:
+            if image_count == 1:
+                specific_attachment = "an image"
+            elif file_count == 1:
+                specific_attachment = "a file"
+            elif has_code:
+                specific_attachment = "a code block"
+        
         # Message construction
         final_content = ""
         if is_long_message:
             base = f"{display_name} sent"
-            if total_types > 0:
-                final_content = f"{base} multiple attachments and a long message"
+            if total_attachments > 0:
+                if specific_attachment and total_attachments == 1:
+                    final_content = f"{base} {specific_attachment} and a long message"
+                else:
+                    final_content = f"{base} multiple attachments and a long message"
             else:
                 final_content = f"{base} a long message"
-        elif total_types > 0:
+        elif total_attachments > 0:
             base = f"{display_name} sent"
+            
+            if specific_attachment:
+                attachment_desc = specific_attachment
+            else:
+                attachment_desc = "multiple attachments"
+            
             if processed_content:
                 final_content = f"{base} {attachment_desc} and said... {processed_content}"
             else:
@@ -623,7 +619,7 @@ async def on_message(message):
         has_content = any([
             re.search(r'[a-zA-Z0-9]', final_content),
             emoji.emoji_count(final_content) > 0,
-            total_types > 0
+            total_attachments > 0
         ])
 
         if not has_content:
