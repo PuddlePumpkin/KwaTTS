@@ -32,6 +32,8 @@ LAST_VOICE_CHANNEL = None
 RECONNECT_ATTEMPTS = 0
 MAX_RECONNECT_ATTEMPTS = 3
 VOICE_STATE_LOCK = None
+CURRENT_FILE = None
+CURRENT_TASK = None
 
 async def graceful_shutdown(signame=None):
     """Handle all shutdown tasks properly"""
@@ -181,7 +183,7 @@ async def attempt_reconnection():
 # ----------------------------------
 # Change Voice Edge Command
 # ----------------------------------
-@bot.tree.command(name="changevoiceedge", description="Set your Edge TTS voice", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="change_voice_edge", description="Set your Edge TTS voice", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(voice="The Edge TTS voice to use")
 async def changevoiceedge(interaction: discord.Interaction, voice: str):
     global edge_voices
@@ -206,7 +208,7 @@ async def edge_voice_autocomplete(interaction: discord.Interaction, current: str
 # ----------------------------------
 # Universal Settings Command
 # ----------------------------------
-@bot.tree.command(name="usersettings", description="Adjust your TTS settings", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="user_settings", description="Adjust your TTS preferences", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(volume="Output volume (0-100, default 100)")
 async def usersettings(
     interaction: discord.Interaction,
@@ -223,7 +225,7 @@ async def usersettings(
 # ----------------------------------
 # toggle ignoreme
 # ----------------------------------
-@bot.tree.command(name="ignoremetoggle", description="toggles ignore my messages", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="toggle_ignore_me", description="Toggle whether your messages are read", guild=discord.Object(id=GUILD_ID))
 async def ignoremetoggle(interaction: discord.Interaction):
     userconfig = load_user_config(str(interaction.user.id))
     try:
@@ -238,7 +240,7 @@ async def ignoremetoggle(interaction: discord.Interaction):
 # ----------------------------------
 # Edge settings command
 # ----------------------------------
-@bot.tree.command(name="edgesettings", description="Set your Edge TTS pitch and volume offsets", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="edge_settings", description="Set your Edge TTS pitch and volume offsets", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(
     pitchoffset="Pitch offset for Edge TTS (-30 to 30, default 0)",
     volumeoffset="Volume offset for Edge TTS (-50 to 50, default 0)"
@@ -325,7 +327,7 @@ async def leave(interaction: discord.Interaction):
 # ----------------------------------
 # gtts Command
 # ----------------------------------
-@bot.tree.command(name="changevoicegtts", description="Switch to Google TTS with optional country TLD", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="change_voice_gtts", description="Switch to Google TTS with optional country TLD", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(tldendpoint="Country TLD for accent (e.g. 'co.uk' for British English)")
 async def changevoicegtts(interaction: discord.Interaction, tldendpoint: str = "com"):
     userconfig = load_user_config(str(interaction.user.id))
@@ -362,7 +364,101 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Failed to sync commands: {e}")
 
+
+# ----------------------------------
+# Stopreading Command (current message only)
+# ----------------------------------
+@bot.tree.command(name="stop_reading", description="Interrupt the currently playing message", guild=discord.Object(id=GUILD_ID))
+async def stopreading(interaction: discord.Interaction):
+    voice_client = interaction.guild.voice_client
+    if not voice_client or not voice_client.is_connected():
+        await interaction.response.send_message("❌ Bot is not connected to voice.", ephemeral=True)
+        return
+
+    response = []
+    if voice_client.is_playing():
+        voice_client.stop()
+        response.append("⏹️ Stopped current playback")
+        
+        # Immediate cleanup
+        if CURRENT_FILE and os.path.exists(CURRENT_FILE):
+            try:
+                os.remove(CURRENT_FILE)
+                response.append("🧹 Cleaned current file")
+            except Exception as e:
+                print(f"Stopreading cleanup error: {e}")
+    
+    await interaction.response.send_message("\n".join(response) if response else "❌ No audio playing", ephemeral=True)
+
+# ----------------------------------
+# Clearqueue Command (stop + clear queue)
+# ----------------------------------
+@bot.tree.command(name="clear_queue", description="Empty the message queue and stop playback", guild=discord.Object(id=GUILD_ID))
+async def clearqueue(interaction: discord.Interaction):
+    global IS_PLAYING, CURRENT_FILE, CURRENT_TASK, QUEUE_LOCK
+    
+    voice_client = interaction.guild.voice_client
+    if not voice_client or not voice_client.is_connected():
+        await interaction.response.send_message("❌ Bot is not connected to voice.", ephemeral=True)
+        return
+
+    cleaned = 0
+    response = []
+
+    # Stop current playback
+    if voice_client.is_playing():
+        voice_client.stop()
+        response.append("⏹️ Stopped current playback")
+
+    # Get all temp files BEFORE clearing queue
+    temp_files = set(Path(".").glob("temp_*.mp3"))
+    
+    async with QUEUE_LOCK:
+        # Cancel and clean queued items
+        for task, future in tts_queue:
+            output_file = task.get("debug_mp3") or task.get("debug_wav")
+            
+            # Cancel generation if not done
+            if not future.done():
+                future.cancel()
+            
+            # Remove from temp_files set if exists
+            if output_file:
+                temp_files.discard(Path(output_file))
+
+        # Clear queue first to prevent race conditions
+        tts_queue.clear()
+        
+        # Clean current file
+        if CURRENT_FILE and os.path.exists(CURRENT_FILE):
+            try:
+                os.remove(CURRENT_FILE)
+                cleaned += 1
+                temp_files.discard(Path(CURRENT_FILE))
+            except Exception as e:
+                print(f"Current file cleanup error: {e}")
+            CURRENT_FILE = None
+            CURRENT_TASK = None
+        
+        IS_PLAYING = False
+
+        # Nuclear cleanup for any remaining temp files
+        for temp_file in temp_files:
+            try:
+                temp_file.unlink()
+                cleaned += 1
+                print(f"☢️ Nuclear cleanup: {temp_file}")
+            except Exception as e:
+                print(f"Nuclear cleanup error: {e}")
+
+    if cleaned > 0:
+        response.append(f"🧹 Cleared {cleaned} speech tasks")
+    
+    await interaction.response.send_message("\n".join(response) if response else "❌ Queue was empty", ephemeral=True)
+
+
 async def generate_audio(task: dict) -> discord.FFmpegPCMAudio:
+    global CURRENT_FILE, CURRENT_TASK
     start_time = time.time()
     safe_message = windows_escape(task["content"])
     output_file = task.get("debug_mp3") or task.get("debug_wav")
@@ -399,8 +495,19 @@ async def generate_audio(task: dict) -> discord.FFmpegPCMAudio:
             options=f'-af "volume={volume:.2f}"'
         )
 
+    except asyncio.CancelledError:
+        if output_file and os.path.exists(output_file):
+            try:
+                os.remove(output_file)
+                print(f"🌀 Cancelled task cleaned: {output_file}")
+            except Exception as e:
+                print(f"🌀 Cancellation cleanup error: {e}")
+        raise
     finally:
         print(f"Audio generation took: {time.time() - start_time:.2f}s")
+        if output_file == CURRENT_FILE:
+            CURRENT_FILE = None
+            CURRENT_TASK = None
 
 def build_gtts_command(task: dict, safe_message: str) -> str:
     """Build absolute path gTTS command with verification"""
@@ -439,64 +546,61 @@ def build_edge_command(task: dict, safe_message: str) -> str:
 
 
 async def process_queue():
-    global IS_PLAYING, QUEUE_LOCK
-
+    global IS_PLAYING, CURRENT_FILE, CURRENT_TASK, QUEUE_LOCK
     if not QUEUE_LOCK:  # Safety check
         print("Queue lock not initialized!")
         return
-
     async with QUEUE_LOCK:
         voice_client = bot.get_guild(GUILD_ID).voice_client
         if not voice_client or not voice_client.is_connected():
-            # Cleanup any remaining queue items
+            # Nuclear cleanup if disconnected
             for task, future in tts_queue:
                 output_file = task.get("debug_mp3") or task.get("debug_wav")
                 if output_file and os.path.exists(output_file):
                     try:
                         os.remove(output_file)
+                        print(f"⚠️ Disconnect cleanup: {output_file}")
                     except Exception as e:
-                        print(f"Cleanup error: {str(e)}")
+                        print(f"Disconnect cleanup error: {e}")
             tts_queue.clear()
             IS_PLAYING = False
             return
+            
         if tts_queue and not IS_PLAYING:
             IS_PLAYING = True
             task, future = tts_queue.pop(0)
+            CURRENT_FILE = task.get("debug_mp3") or task.get("debug_wav")
+            CURRENT_TASK = task
+            
             try:
                 source = await future
-                # Define cleanup function
+                
                 def cleanup(error):
-                    global IS_PLAYING
+                    global IS_PLAYING, CURRENT_FILE, CURRENT_TASK
                     IS_PLAYING = False
-                    if error:
-                        print(f"Playback error for \"{task['content'][:50]}\"...: {error}")
-                        if task["retry_count"] < 3:
-                            task["retry_count"] += 1
-                            new_future = asyncio.create_task(generate_audio(task))
-                            tts_queue.insert(0, (task, new_future))
-                        else:
-                            print(f"Task \"{task['content'][:50]}\"... exceeded retry limit, skipping")
-                    else:
-                        output_file = task.get("debug_mp3") or task.get("debug_wav")
-                        if output_file and os.path.exists(output_file):
-                            try:
-                                os.remove(output_file)
-                            except Exception as e:
-                                print(f"Cleanup error: {str(e)}")
+                    
+                    if CURRENT_FILE and os.path.exists(CURRENT_FILE):
+                        try:
+                            os.remove(CURRENT_FILE)
+                            print(f"♻️ Natural cleanup: {CURRENT_FILE}")
+                        except Exception as e:
+                            print(f"Natural cleanup error: {e}")
+                    
+                    CURRENT_FILE = None
+                    CURRENT_TASK = None
                     asyncio.run_coroutine_threadsafe(process_queue(), bot.loop)
+                
                 voice_client.play(source, after=cleanup)
                 print(f"Now playing: \"{task['content'][:50]}\"...")
+                
             except Exception as e:
-                print(f"Error generating audio for \"{task['content'][:50]}\"...': {str(e)}")
+                print(f"Error generating audio: {str(e)}")
                 traceback.print_exc()
                 if task["retry_count"] < 3:
                     task["retry_count"] += 1
                     new_future = asyncio.create_task(generate_audio(task))
                     tts_queue.insert(0, (task, new_future))
-                else:
-                    print(f"Task \"{task['content'][:50]}\" exceeded retry limit, skipping")
                 IS_PLAYING = False
-                await asyncio.sleep(0.1)
 
 
 def filter_acronyms(content: str) -> str:
@@ -543,6 +647,7 @@ async def on_message(message):
     global QUEUE_LOCK
 
     if not QUEUE_LOCK:
+        print("Queue lock not initialized!")
         return
 
     if message.channel.id != TEXT_CHANNEL_ID or message.author.bot:
@@ -689,7 +794,7 @@ def create_tts_task(content: str, config: dict) -> dict:
 # ----------------------------------
 # Add Acronym Command
 # ----------------------------------
-@bot.tree.command(name="addacronym", description="Add or update an acronym replacement", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="add_acronym", description="Create new acronym expansion", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(acronym="The acronym to add/update", translation="The phrase to replace it with")
 async def addacronym(interaction: discord.Interaction, acronym: str, translation: str):
     try:
@@ -796,7 +901,7 @@ async def handle_reconnection_sequence():
 # ----------------------------------
 # Remove Acronym Command
 # ----------------------------------
-@bot.tree.command(name="removeacronym", description="Remove an acronym replacement", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="remove_acronym", description="Delete an existing acronym", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(acronym="The acronym to remove")
 async def removeacronym(interaction: discord.Interaction, acronym: str):
     try:
