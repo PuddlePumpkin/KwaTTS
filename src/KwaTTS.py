@@ -538,7 +538,7 @@ def filter_acronyms(content: str) -> str:
 async def on_message(message):
     global QUEUE_LOCK
 
-    if not QUEUE_LOCK:  # Safety check
+    if not QUEUE_LOCK:
         print("Queue lock not initialized!")
         return
 
@@ -555,30 +555,39 @@ async def on_message(message):
         processed_content = filter_acronyms(processed_content)
         processed_content = clean_special_content(processed_content)
 
-        # Handle image and other file attachments
-        image_attachments = [
-            att for att in message.attachments 
-            if att.content_type and att.content_type.startswith('image/')
-        ]
+        # Check if message is too long after initial processing
+        is_long_message = len(processed_content) > 400
         member = message.guild.get_member(int(message.author.id))
         display_name = member.display_name if member else "User"
 
-        if image_attachments:
-            if not processed_content.strip():
-                processed_content = f"{display_name} sent an image file"
+        if is_long_message:
+            if message.attachments:
+                processed_content = f"{display_name} sent an attachment and a long message"
             else:
-                processed_content = f"{display_name} sent an image file and said... {processed_content}"
-        elif message.attachments:
-            if not processed_content.strip():
-                processed_content = f"{display_name} sent a file"
-            else:
-                processed_content = f"{display_name} sent a file and said... {processed_content}"
+                processed_content = f"{display_name} sent a long message"
+        else:
+            # Handle image and other file attachments for non-long messages
+            image_attachments = [
+                att for att in message.attachments 
+                if att.content_type and att.content_type.startswith('image/')
+            ]
+
+            if image_attachments:
+                if not processed_content.strip():
+                    processed_content = f"{display_name} sent an image file"
+                else:
+                    processed_content = f"{display_name} sent an image file and said... {processed_content}"
+            elif message.attachments:
+                if not processed_content.strip():
+                    processed_content = f"{display_name} sent a file"
+                else:
+                    processed_content = f"{display_name} sent a file and said... {processed_content}"
 
         # Skip processing if content is empty after handling
         if not processed_content.strip():
             return
 
-        # In the on_message event handler, replace the content check with:
+        # Check for meaningful content (alphanumeric or emoji)
         has_alpha_numeric = re.search(r'[a-zA-Z0-9]', processed_content)
         has_emoji = emoji.emoji_count(processed_content) > 0
 
@@ -597,7 +606,7 @@ async def on_message(message):
     except Exception as e:
         print(f"Error handling message: {str(e)}")
         traceback.print_exc()
-
+        
 def replace_mentions(content: str, guild) -> str:
     def replace_match(match):
         user_id = match.group(1)
