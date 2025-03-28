@@ -17,11 +17,31 @@ from pathlib import Path
 from discord.ext import commands
 from discord import app_commands
 
+# ----------------------------------
+# GLOBALS
+# ----------------------------------
+bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
+voice_client = None
+tts_queue = []
+QUEUE_LOCK = None
+IS_PLAYING = False
+ACRONYM_CACHE = None
+ACRONYM_LAST_MODIFIED = 0
+CONNECTION_STATE = False
+LAST_VOICE_CHANNEL = None
+RECONNECT_ATTEMPTS = 0
+MAX_RECONNECT_ATTEMPTS = 3
+VOICE_STATE_LOCK = None
+
 async def graceful_shutdown(signame=None):
     """Handle all shutdown tasks properly"""
+    global QUEUE_LOCK
     print(f"\nInitiating graceful shutdown ({signame if signame else 'manual'})...")
     
     # Cleanup queued files
+    if not QUEUE_LOCK:  # Safety check
+        print("Queue lock not initialized!")
+        return
     async with QUEUE_LOCK:
         for task, future in tts_queue:
             output_file = task.get("debug_mp3") or task.get("debug_wav")
@@ -109,24 +129,6 @@ try:
     GUILD_ID = config["guild_id"]
 except Exception as e:
     sys.exit(f"❌ Config loading failed: {e}")
-
-
-
-# ----------------------------------
-# GLOBALS
-# ----------------------------------
-bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
-voice_client = None
-tts_queue = []
-QUEUE_LOCK = asyncio.Lock()
-IS_PLAYING = False
-ACRONYM_CACHE = None
-ACRONYM_LAST_MODIFIED = 0
-CONNECTION_STATE = False
-LAST_VOICE_CHANNEL = None
-RECONNECT_ATTEMPTS = 0
-MAX_RECONNECT_ATTEMPTS = 3
-VOICE_STATE_LOCK = None
 
 async def attempt_reconnection():
     global CONNECTION_STATE, RECONNECT_ATTEMPTS, LAST_VOICE_CHANNEL, MAX_RECONNECT_ATTEMPTS
@@ -292,7 +294,10 @@ async def join(interaction: discord.Interaction):
 # ----------------------------------
 @bot.tree.command(name="leave", description="Requests bot to leave voice", guild=discord.Object(id=GUILD_ID))
 async def leave(interaction: discord.Interaction):
-    global CONNECTION_STATE, LAST_VOICE_CHANNEL
+    global CONNECTION_STATE, LAST_VOICE_CHANNEL, QUEUE_LOCK
+    if not QUEUE_LOCK:  # Safety check
+        print("Queue lock not initialized!")
+        return
     await interaction.response.send_message(f"Requested leave...", ephemeral=True)
     voice_client = interaction.guild.voice_client
     if voice_client and voice_client.is_connected():
@@ -341,9 +346,11 @@ def windows_escape(text):
 # ----------------------------------
 @bot.event
 async def on_ready():
-    global VOICE_STATE_LOCK
+    global VOICE_STATE_LOCK, QUEUE_LOCK
     # Initialize locks after event loop is running
     VOICE_STATE_LOCK = asyncio.Lock()
+    QUEUE_LOCK = asyncio.Lock()
+
     print(f'Bot ready: {bot.user}')
     setup_signal_handlers()
     
@@ -432,7 +439,11 @@ def build_edge_command(task: dict, safe_message: str) -> str:
 
 
 async def process_queue():
-    global IS_PLAYING
+    global IS_PLAYING, QUEUE_LOCK
+
+    if not QUEUE_LOCK:  # Safety check
+        print("Queue lock not initialized!")
+        return
 
     async with QUEUE_LOCK:
         voice_client = bot.get_guild(GUILD_ID).voice_client
@@ -525,6 +536,12 @@ def filter_acronyms(content: str) -> str:
 # ----------------------------------
 @bot.event
 async def on_message(message):
+    global QUEUE_LOCK
+
+    if not QUEUE_LOCK:  # Safety check
+        print("Queue lock not initialized!")
+        return
+
     if message.channel.id != TEXT_CHANNEL_ID or message.author.bot:
         return
 
@@ -664,6 +681,11 @@ async def addacronym(interaction: discord.Interaction, acronym: str, translation
 @bot.event
 async def on_voice_state_update(member, before, after):
     global CONNECTION_STATE, VOICE_STATE_LOCK, LAST_VOICE_CHANNEL, QUEUE_LOCK
+
+    if not QUEUE_LOCK:  # Safety check
+        print("Queue lock not initialized!")
+        return
+
     if member.id == bot.user.id:
         if before.channel and not after.channel:
             print("⚠️ Bot disconnected from voice channel")
@@ -703,6 +725,10 @@ async def on_voice_state_update(member, before, after):
                 tts_queue.clear()
 
 async def handle_reconnection_sequence():
+    global QUEUE_LOCK
+    if not QUEUE_LOCK:  # Safety check
+        print("Queue lock not initialized!")
+        return
     print("Starting reconnection sequence...")
     success = await attempt_reconnection()
     
