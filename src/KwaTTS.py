@@ -126,10 +126,11 @@ CONNECTION_STATE = False
 LAST_VOICE_CHANNEL = None
 RECONNECT_ATTEMPTS = 0
 MAX_RECONNECT_ATTEMPTS = 3
-VOICE_STATE_LOCK = asyncio.Lock()
+VOICE_STATE_LOCK = None
 
 async def attempt_reconnection():
     global CONNECTION_STATE, RECONNECT_ATTEMPTS
+    
     async with VOICE_STATE_LOCK:
         if not CONNECTION_STATE or RECONNECT_ATTEMPTS >= MAX_RECONNECT_ATTEMPTS:
             return
@@ -139,21 +140,41 @@ async def attempt_reconnection():
 
     try:
         print(f"Attempting reconnect ({RECONNECT_ATTEMPTS}/{MAX_RECONNECT_ATTEMPTS})...")
+        
+        # Ensure channel still exists
+        if not target_channel or not target_channel.guild:
+            print("❌ Target channel no longer exists")
+            raise ConnectionError("Invalid channel")
+            
         voice_client = await target_channel.connect()
+        
         async with VOICE_STATE_LOCK:
             CONNECTION_STATE = True
             RECONNECT_ATTEMPTS = 0
+            
         print(f"✅ Reconnected to {target_channel.name}")
+        return True
+        
+    except discord.ClientException as e:
+        print(f"❌ ClientException: {str(e)}")
+    except discord.DiscordServerError as e:
+        print(f"❌ Discord Server Error: {str(e)}")
     except Exception as e:
-        print(f"❌ Reconnect failed: {str(e)}")
-        if RECONNECT_ATTEMPTS < MAX_RECONNECT_ATTEMPTS:
-            await asyncio.sleep(5)
-            await attempt_reconnection()
-        else:
-            async with VOICE_STATE_LOCK:
-                CONNECTION_STATE = False
-                LAST_VOICE_CHANNEL = None
-            print("❌ Max reconnect attempts reached")
+        print(f"❌ Unexpected error: {str(e)}")
+        traceback.print_exc()
+
+    # Retry logic with backoff    
+    if RECONNECT_ATTEMPTS < MAX_RECONNECT_ATTEMPTS:
+        delay = min(2 ** RECONNECT_ATTEMPTS, 30)  # Exponential backoff
+        print(f"Retrying in {delay} seconds...")
+        await asyncio.sleep(delay)
+        return await attempt_reconnection()
+    else:
+        async with VOICE_STATE_LOCK:
+            CONNECTION_STATE = False
+            LAST_VOICE_CHANNEL = None
+        print("❌ Max reconnect attempts reached")
+        return False
 
 # ----------------------------------
 # Change Voice Edge Command
@@ -320,6 +341,9 @@ def windows_escape(text):
 # ----------------------------------
 @bot.event
 async def on_ready():
+    global VOICE_STATE_LOCK
+    # Initialize locks after event loop is running
+    VOICE_STATE_LOCK = asyncio.Lock()
     print(f'Bot ready: {bot.user}')
     setup_signal_handlers()
     
@@ -639,19 +663,21 @@ async def addacronym(interaction: discord.Interaction, acronym: str, translation
 # ----------------------------------
 @bot.event
 async def on_voice_state_update(member, before, after):
-    global CONNECTION_STATE, LAST_VOICE_CHANNEL
-    
-    # Handle bot's own voice state changes
-    if member == bot.user:
-        # Check if bot was disconnected
+    if member.id == bot.user.id:
         if before.channel and not after.channel:
+            print("⚠️ Bot disconnected from voice channel")
+            
+            # Check if this was an intentional disconnect
             async with VOICE_STATE_LOCK:
-                if CONNECTION_STATE:  # Unexpected disconnect
-                    print("⚠️ Unexpected disconnection detected")
-                    await attempt_reconnection()
-                else:  # Intentional disconnect
-                    LAST_VOICE_CHANNEL = None
-        return
+                if not CONNECTION_STATE:
+                    print("Clean disconnect, not reconnecting")
+                    return
+                
+                # Maintain connection state for reconnect attempts
+                CONNECTION_STATE = True
+                
+            # Start reconnection in a new task
+            asyncio.create_task(handle_reconnection_sequence())
 
     # Handle human members leaving
     voice_client = member.guild.voice_client
@@ -675,6 +701,32 @@ async def on_voice_state_update(member, before, after):
                             print(f"Error cleaning file: {e}")
                 tts_queue.clear()
 
+async def handle_reconnection_sequence():
+    print("Starting reconnection sequence...")
+    success = await attempt_reconnection()
+    
+    if not success:
+        # Notify in text channel
+        channel = bot.get_channel(TEXT_CHANNEL_ID)
+        if channel:
+            await channel.send("⚠️ Failed to reconnect to voice channel after several attempts. Use `/join` to manually reconnect.")
+            
+        # Full cleanup
+        async with VOICE_STATE_LOCK:
+            CONNECTION_STATE = False
+            LAST_VOICE_CHANNEL = None
+            
+        async with QUEUE_LOCK:
+            for task, future in tts_queue:
+                output_file = task.get("debug_mp3") or task.get("debug_wav")
+                if output_file and os.path.exists(output_file):
+                    try:
+                        os.remove(output_file)
+                    except Exception as e:
+                        print(f"Error cleaning file: {e}")
+            tts_queue.clear()
+
+            
 # ----------------------------------
 # Remove Acronym Command
 # ----------------------------------
