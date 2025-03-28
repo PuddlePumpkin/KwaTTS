@@ -534,6 +534,10 @@ def filter_acronyms(content: str) -> str:
 # ----------------------------------
 # On Message Event
 # ----------------------------------
+def contains_code_block(content: str) -> bool:
+    """Check if message contains markdown code blocks"""
+    return re.search(r'```', content) is not None  # Simplified check
+
 @bot.event
 async def on_message(message):
     global QUEUE_LOCK
@@ -550,52 +554,73 @@ async def on_message(message):
         if userconfig.get("ignoreme", False):
             return
 
+        # Initial content processing
         processed_content = message.content
+        
+        # Remove code blocks first before other processing
+        has_code = contains_code_block(processed_content)
+        processed_content = re.sub(r'```.*?```', ' ', processed_content, flags=re.DOTALL)
+        processed_content = re.sub(r'\s+', ' ', processed_content).strip()
+
+        # Continue normal processing
         processed_content = replace_mentions(processed_content, message.guild)
         processed_content = filter_acronyms(processed_content)
         processed_content = clean_special_content(processed_content)
 
-        # Check if message is too long after initial processing
-        is_long_message = len(processed_content) > 400
+        # Attachment detection
+        image_attachments = [att for att in message.attachments 
+                           if att.content_type and att.content_type.startswith('image/')]
+        other_attachments = [att for att in message.attachments 
+                           if att not in image_attachments]
         member = message.guild.get_member(int(message.author.id))
         display_name = member.display_name if member else "User"
 
+        # Build attachment list
+        attachments = []
+        if has_code:
+            attachments.append("code block")
+        if image_attachments:
+            attachments.append("image" if len(image_attachments) == 1 else "images")
+        if other_attachments:
+            attachments.append("file" if len(other_attachments) == 1 else "files")
+
+        total_attachments = len(attachments)
+        is_long_message = len(processed_content) > 400
+
+        # Message prioritization logic
+        final_content = ""
         if is_long_message:
-            if message.attachments:
-                processed_content = f"{display_name} sent an attachment and a long message"
+            base = f"{display_name} sent"
+            if total_attachments > 0:
+                final_content = f"{base} multiple attachments and a long message"
             else:
-                processed_content = f"{display_name} sent a long message"
+                final_content = f"{base} a long message"
+        elif total_attachments > 0:
+            base = f"{display_name} sent"
+            
+            if total_attachments > 1:
+                attachment_desc = "multiple attachments"
+            else:
+                attachment_desc = f"a {attachments[0]}"
+            
+            if processed_content:
+                final_content = f"{base} {attachment_desc} and said... {processed_content}"
+            else:
+                final_content = f"{base} {attachment_desc}"
         else:
-            # Handle image and other file attachments for non-long messages
-            image_attachments = [
-                att for att in message.attachments 
-                if att.content_type and att.content_type.startswith('image/')
-            ]
+            final_content = processed_content
 
-            if image_attachments:
-                if not processed_content.strip():
-                    processed_content = f"{display_name} sent an image file"
-                else:
-                    processed_content = f"{display_name} sent an image file and said... {processed_content}"
-            elif message.attachments:
-                if not processed_content.strip():
-                    processed_content = f"{display_name} sent a file"
-                else:
-                    processed_content = f"{display_name} sent a file and said... {processed_content}"
+        # Final validation
+        has_content = any([
+            re.search(r'[a-zA-Z0-9]', final_content),
+            emoji.emoji_count(final_content) > 0,
+            total_attachments > 0
+        ])
 
-        # Skip processing if content is empty after handling
-        if not processed_content.strip():
+        if not has_content:
             return
 
-        # Check for meaningful content (alphanumeric or emoji)
-        has_alpha_numeric = re.search(r'[a-zA-Z0-9]', processed_content)
-        has_emoji = emoji.emoji_count(processed_content) > 0
-
-        if (not (has_alpha_numeric or has_emoji) 
-            and not message.attachments):
-            return
-
-        task = create_tts_task(processed_content, userconfig)
+        task = create_tts_task(final_content, userconfig)
         future = asyncio.create_task(generate_audio(task))
         
         async with QUEUE_LOCK:
@@ -604,9 +629,9 @@ async def on_message(message):
         await process_queue()
 
     except Exception as e:
-        print(f"Error handling message: {str(e)}")
+        print(f"Message handling error: {str(e)}")
         traceback.print_exc()
-        
+
 def replace_mentions(content: str, guild) -> str:
     def replace_match(match):
         user_id = match.group(1)
