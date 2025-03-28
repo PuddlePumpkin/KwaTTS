@@ -122,7 +122,38 @@ QUEUE_LOCK = asyncio.Lock()
 IS_PLAYING = False
 ACRONYM_CACHE = None
 ACRONYM_LAST_MODIFIED = 0
+CONNECTION_STATE = False
+LAST_VOICE_CHANNEL = None
+RECONNECT_ATTEMPTS = 0
+MAX_RECONNECT_ATTEMPTS = 3
+VOICE_STATE_LOCK = asyncio.Lock()
 
+async def attempt_reconnection():
+    global CONNECTION_STATE, RECONNECT_ATTEMPTS
+    async with VOICE_STATE_LOCK:
+        if not CONNECTION_STATE or RECONNECT_ATTEMPTS >= MAX_RECONNECT_ATTEMPTS:
+            return
+
+        RECONNECT_ATTEMPTS += 1
+        target_channel = LAST_VOICE_CHANNEL
+
+    try:
+        print(f"Attempting reconnect ({RECONNECT_ATTEMPTS}/{MAX_RECONNECT_ATTEMPTS})...")
+        voice_client = await target_channel.connect()
+        async with VOICE_STATE_LOCK:
+            CONNECTION_STATE = True
+            RECONNECT_ATTEMPTS = 0
+        print(f"✅ Reconnected to {target_channel.name}")
+    except Exception as e:
+        print(f"❌ Reconnect failed: {str(e)}")
+        if RECONNECT_ATTEMPTS < MAX_RECONNECT_ATTEMPTS:
+            await asyncio.sleep(5)
+            await attempt_reconnection()
+        else:
+            async with VOICE_STATE_LOCK:
+                CONNECTION_STATE = False
+                LAST_VOICE_CHANNEL = None
+            print("❌ Max reconnect attempts reached")
 
 # ----------------------------------
 # Change Voice Edge Command
@@ -209,38 +240,46 @@ async def edgesettings(
 # ----------------------------------
 @bot.tree.command(name="join", description="Requests bot to join voice", guild=discord.Object(id=GUILD_ID))
 async def join(interaction: discord.Interaction):
+    global CONNECTION_STATE, LAST_VOICE_CHANNEL, RECONNECT_ATTEMPTS
     await interaction.response.send_message(f"Requested join...", ephemeral=True)
     try:
         channel = bot.get_channel(VOICE_CHANNEL_ID)
         if channel:
-            # Check if there are any non-bot members in the target channel
             human_members = [m for m in channel.members if not m.bot]
             if not human_members:
-                await interaction.followup.send("Aborted join (No members present in the channel).", ephemeral=True)
+                await interaction.followup.send("Aborted join (No members present).", ephemeral=True)
                 return
 
-            # Proceed to connect or move
             voice_client = interaction.guild.voice_client
             if voice_client and voice_client.is_connected():
                 await voice_client.move_to(channel)
             else:
                 voice_client = await channel.connect()
+            
+            async with VOICE_STATE_LOCK:
+                CONNECTION_STATE = True
+                LAST_VOICE_CHANNEL = channel
+                RECONNECT_ATTEMPTS = 0
             print(f"Connected to voice: {channel.name}")
         else:
             print("❌ Voice channel not found")
     except Exception as e:
         print(f"❌ Voice connection failed: {e}")
 
-
 # ----------------------------------
 # Leave Command
 # ----------------------------------
 @bot.tree.command(name="leave", description="Requests bot to leave voice", guild=discord.Object(id=GUILD_ID))
 async def leave(interaction: discord.Interaction):
+    global CONNECTION_STATE, LAST_VOICE_CHANNEL
     await interaction.response.send_message(f"Requested leave...", ephemeral=True)
     voice_client = interaction.guild.voice_client
     if voice_client and voice_client.is_connected():
-        # Clean up queued files before disconnecting
+        async with VOICE_STATE_LOCK:
+            CONNECTION_STATE = False
+            LAST_VOICE_CHANNEL = None
+        
+        # Cleanup queued files
         async with QUEUE_LOCK:
             for task, future in tts_queue:
                 output_file = task.get("debug_mp3") or task.get("debug_wav")
@@ -600,20 +639,30 @@ async def addacronym(interaction: discord.Interaction, acronym: str, translation
 # ----------------------------------
 @bot.event
 async def on_voice_state_update(member, before, after):
-    # Ignore the bot's own voice state changes
+    global CONNECTION_STATE, LAST_VOICE_CHANNEL
+    
+    # Handle bot's own voice state changes
     if member == bot.user:
+        # Check if bot was disconnected
+        if before.channel and not after.channel:
+            async with VOICE_STATE_LOCK:
+                if CONNECTION_STATE:  # Unexpected disconnect
+                    print("⚠️ Unexpected disconnection detected")
+                    await attempt_reconnection()
+                else:  # Intentional disconnect
+                    LAST_VOICE_CHANNEL = None
         return
 
+    # Handle human members leaving
     voice_client = member.guild.voice_client
-    if not voice_client or not voice_client.is_connected():
-        return
-
-    # Check if the user was in the bot's channel before the change
-    if before.channel and before.channel == voice_client.channel:
-        # Count human members excluding bots
+    if voice_client and voice_client.is_connected():
+        # Check if there are any non-bot members left in the channel
         human_members = [m for m in voice_client.channel.members if not m.bot]
         if len(human_members) == 0:
             # Disconnect and clean up
+            async with VOICE_STATE_LOCK:
+                CONNECTION_STATE = False
+                LAST_VOICE_CHANNEL = None
             await voice_client.disconnect()
             print("Left voice channel because it became empty.")
             async with QUEUE_LOCK:
