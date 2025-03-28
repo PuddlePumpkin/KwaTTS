@@ -543,7 +543,6 @@ async def on_message(message):
     global QUEUE_LOCK
 
     if not QUEUE_LOCK:
-        print("Queue lock not initialized!")
         return
 
     if message.channel.id != TEXT_CHANNEL_ID or message.author.bot:
@@ -556,53 +555,63 @@ async def on_message(message):
 
         # Initial content processing
         processed_content = message.content
-        
-        # Remove code blocks first before other processing
         has_code = contains_code_block(processed_content)
         processed_content = re.sub(r'```.*?```', ' ', processed_content, flags=re.DOTALL)
         processed_content = re.sub(r'\s+', ' ', processed_content).strip()
 
-        # Continue normal processing
+        # Continue processing
         processed_content = replace_mentions(processed_content, message.guild)
         processed_content = filter_acronyms(processed_content)
         processed_content = clean_special_content(processed_content)
 
-        # Attachment detection
-        image_attachments = [att for att in message.attachments 
-                           if att.content_type and att.content_type.startswith('image/')]
-        other_attachments = [att for att in message.attachments 
-                           if att not in image_attachments]
+        # Attachment analysis
+        image_count = len([att for att in message.attachments 
+                         if att.content_type and att.content_type.startswith('image/')])
+        file_count = len([att for att in message.attachments 
+                        if not att.content_type or not att.content_type.startswith('image/')])
         member = message.guild.get_member(int(message.author.id))
         display_name = member.display_name if member else "User"
 
-        # Build attachment list
-        attachments = []
+        # Build attachment description
+        attachment_types = []
         if has_code:
-            attachments.append("code block")
-        if image_attachments:
-            attachments.append("image" if len(image_attachments) == 1 else "images")
-        if other_attachments:
-            attachments.append("file" if len(other_attachments) == 1 else "files")
+            attachment_types.append("code")
+        if image_count > 0:
+            attachment_types.append("image")
+        if file_count > 0:
+            attachment_types.append("file")
 
-        total_attachments = len(attachments)
+        total_types = len(attachment_types)
         is_long_message = len(processed_content) > 400
+        attachment_desc = ""
 
-        # Message prioritization logic
+        if total_types > 1:
+            attachment_desc = "multiple attachments"
+        elif total_types == 1:
+            att_type = attachment_types[0]
+            if att_type == "code":
+                attachment_desc = "a code block"
+            elif att_type == "image":
+                if image_count == 1:
+                    attachment_desc = "an image"
+                else:
+                    attachment_desc = "multiple images"
+            elif att_type == "file":
+                if file_count == 1:
+                    attachment_desc = "a file"
+                else:
+                    attachment_desc = "multiple files"
+
+        # Message construction
         final_content = ""
         if is_long_message:
             base = f"{display_name} sent"
-            if total_attachments > 0:
+            if total_types > 0:
                 final_content = f"{base} multiple attachments and a long message"
             else:
                 final_content = f"{base} a long message"
-        elif total_attachments > 0:
+        elif total_types > 0:
             base = f"{display_name} sent"
-            
-            if total_attachments > 1:
-                attachment_desc = "multiple attachments"
-            else:
-                attachment_desc = f"a {attachments[0]}"
-            
             if processed_content:
                 final_content = f"{base} {attachment_desc} and said... {processed_content}"
             else:
@@ -610,11 +619,11 @@ async def on_message(message):
         else:
             final_content = processed_content
 
-        # Final validation
+        # Validate content
         has_content = any([
             re.search(r'[a-zA-Z0-9]', final_content),
             emoji.emoji_count(final_content) > 0,
-            total_attachments > 0
+            total_types > 0
         ])
 
         if not has_content:
@@ -629,7 +638,7 @@ async def on_message(message):
         await process_queue()
 
     except Exception as e:
-        print(f"Message handling error: {str(e)}")
+        print(f"Message processing error: {str(e)}")
         traceback.print_exc()
 
 def replace_mentions(content: str, guild) -> str:
