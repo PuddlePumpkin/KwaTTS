@@ -11,6 +11,7 @@ import shutil
 import time
 import platform
 import signal
+import emoji
 from typing import List
 from pathlib import Path
 from discord.ext import commands
@@ -230,7 +231,7 @@ async def join(interaction: discord.Interaction):
     except Exception as e:
         print(f"❌ Voice connection failed: {e}")
 
-        
+
 # ----------------------------------
 # Leave Command
 # ----------------------------------
@@ -497,8 +498,11 @@ async def on_message(message):
         if not processed_content.strip():
             return
 
-        # New check: Skip if no letters and no attachments
-        if (not re.search(r'[a-zA-Z]', processed_content, re.IGNORECASE) 
+        # In the on_message event handler, replace the content check with:
+        has_alpha_numeric = re.search(r'[a-zA-Z0-9]', processed_content)
+        has_emoji = emoji.emoji_count(processed_content) > 0
+
+        if (not (has_alpha_numeric or has_emoji) 
             and not message.attachments):
             return
 
