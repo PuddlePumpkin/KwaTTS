@@ -12,6 +12,9 @@ import time
 import platform
 import signal
 import emoji
+import psutil
+import subprocess
+
 from typing import List
 from pathlib import Path
 from discord.ext import commands
@@ -34,6 +37,59 @@ MAX_RECONNECT_ATTEMPTS = 3
 VOICE_STATE_LOCK = None
 CURRENT_FILE = None
 CURRENT_TASK = None
+ACTIVE_FILES = set()
+FILE_LOCK = asyncio.Lock()
+
+def is_file_locked(filepath):
+    try:
+        for proc in psutil.process_iter():
+            try:
+                files = proc.open_files()
+                if files:
+                    for f in files:
+                        if f.path == os.path.abspath(filepath):
+                            return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return False
+    except Exception as e:
+        print(f"🔒 File lock check error: {str(e)}")
+        return False
+
+def safe_delete(path, max_retries=5, initial_delay=0.1):
+    for i in range(max_retries):
+        try:
+            if os.path.exists(path):
+                # Check if FFmpeg still has the file open
+                for proc in psutil.process_iter():
+                    try:
+                        if "ffmpeg" in proc.name().lower():
+                            if path in [f.path for f in proc.open_files()]:
+                                if i == 0:
+                                    print(f"🔒 FFmpeg still has {path} open")
+                                continue
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+                
+                os.remove(path)
+                print(f"✅ Successfully deleted {path} (attempt {i+1})")
+                return True
+        except Exception as e:
+            if i == max_retries - 1:
+                print(f"❌ Final deletion failed for {path}: {str(e)}")
+                return False
+            time.sleep(initial_delay * (2 ** i))  # Exponential backoff
+    return False
+
+async def orphan_file_check():
+    while True:
+        await asyncio.sleep(300)  # 5 minutes
+        async with FILE_LOCK:
+            for f in list(ACTIVE_FILES):
+                if os.path.exists(f):
+                    print(f"⚠️ Orphan file detected: {f}")
+                    safe_delete(f)
+                ACTIVE_FILES.discard(f)
 
 async def graceful_shutdown(signame=None):
     """Handle all shutdown tasks properly"""
@@ -49,7 +105,7 @@ async def graceful_shutdown(signame=None):
             output_file = task.get("debug_mp3") or task.get("debug_wav")
             if output_file and os.path.exists(output_file):
                 try:
-                    os.remove(output_file)
+                    safe_delete(output_file)
                     print(f"Cleaned queued file: {output_file}")
                 except Exception as e:
                     print(f"Error cleaning {output_file}: {str(e)}")
@@ -313,7 +369,7 @@ async def leave(interaction: discord.Interaction):
                 output_file = task.get("debug_mp3") or task.get("debug_wav")
                 if output_file and os.path.exists(output_file):
                     try:
-                        os.remove(output_file)
+                        safe_delete(output_file)
                         print(f"Cleaned queued file: {output_file}")
                     except Exception as e:
                         print(f"Error cleaning {output_file}: {str(e)}")
@@ -355,7 +411,6 @@ async def on_ready():
 
     print(f'Bot ready: {bot.user}')
     setup_signal_handlers()
-    
     try:
         guild = discord.Object(id=GUILD_ID)
         print(f"Commands in tree: {[cmd.name for cmd in bot.tree.get_commands(guild=guild)]}")
@@ -363,6 +418,7 @@ async def on_ready():
         print(f"✅ Synced commands: {[cmd.name for cmd in synced]}")
     except Exception as e:
         print(f"❌ Failed to sync commands: {e}")
+    bot.loop.create_task(orphan_file_check())
 
 
 # ----------------------------------
@@ -383,86 +439,115 @@ async def stopreading(interaction: discord.Interaction):
         # Immediate cleanup
         if CURRENT_FILE and os.path.exists(CURRENT_FILE):
             try:
-                os.remove(CURRENT_FILE)
+                safe_delete(CURRENT_FILE)
                 response.append("🧹 Cleaned current file")
             except Exception as e:
                 print(f"Stopreading cleanup error: {e}")
     
     await interaction.response.send_message("\n".join(response) if response else "❌ No audio playing", ephemeral=True)
 
+async def background_cleanup(path):
+    """Dedicated cleanup for specific problematic file"""
+    target = os.path.abspath(path)
+    print(f"🔁 Starting background cleanup for {target}")
+    
+    for i in range(10):
+        if not os.path.exists(target):
+            print(f"🏁 Background cleanup: {target} already gone")
+            return
+            
+        if safe_delete(target):
+            return
+            
+        await asyncio.sleep(5)  # Longer delays between attempts
+    
+    print(f"🚨 Permanent failure: Could not delete {target}")
+
 # ----------------------------------
 # Clearqueue Command (stop + clear queue)
 # ----------------------------------
 @bot.tree.command(name="clear_queue", description="Empty the message queue and stop playback", guild=discord.Object(id=GUILD_ID))
 async def clearqueue(interaction: discord.Interaction):
-    global IS_PLAYING, CURRENT_FILE, CURRENT_TASK, QUEUE_LOCK
+    global IS_PLAYING, CURRENT_FILE, CURRENT_TASK, QUEUE_LOCK, ACTIVE_FILES
+    
+    # Immediately defer the response to prevent timeout
+    await interaction.response.defer(ephemeral=True)
     
     voice_client = interaction.guild.voice_client
     if not voice_client or not voice_client.is_connected():
-        await interaction.response.send_message("❌ Bot is not connected to voice.", ephemeral=True)
+        await interaction.followup.send("❌ Bot is not connected to voice.", ephemeral=True)
         return
 
-    cleaned = 0
     response = []
+    files_to_clean = set()
+    failed_files = set()
 
-    # Stop current playback
-    if voice_client.is_playing():
+    # 1. Stop playback and capture initial files
+    if voice_client.is_playing() or voice_client.is_paused():
         voice_client.stop()
         response.append("⏹️ Stopped current playback")
+        if CURRENT_FILE:
+            files_to_clean.add(os.path.abspath(CURRENT_FILE))
 
-    # Get all temp files BEFORE clearing queue
-    temp_files = set(Path(".").glob("temp_*.mp3"))
-    
+    # 2. Collect queued files with lock
     async with QUEUE_LOCK:
-        # Cancel and clean queued items
+        # Cancel pending tasks and collect files
         for task, future in tts_queue:
             output_file = task.get("debug_mp3") or task.get("debug_wav")
-            
-            # Cancel generation if not done
+            if output_file:
+                files_to_clean.add(os.path.abspath(output_file))
             if not future.done():
                 future.cancel()
-            
-            # Remove from temp_files set if exists
-            if output_file:
-                temp_files.discard(Path(output_file))
-
-        # Clear queue first to prevent race conditions
+        
         tts_queue.clear()
-        
-        # Clean current file
-        if CURRENT_FILE and os.path.exists(CURRENT_FILE):
-            try:
-                os.remove(CURRENT_FILE)
-                cleaned += 1
-                temp_files.discard(Path(CURRENT_FILE))
-            except Exception as e:
-                print(f"Current file cleanup error: {e}")
-            CURRENT_FILE = None
-            CURRENT_TASK = None
-        
         IS_PLAYING = False
 
-        # Nuclear cleanup for any remaining temp files
-        for temp_file in temp_files:
-            try:
-                temp_file.unlink()
-                cleaned += 1
-                print(f"☢️ Nuclear cleanup: {temp_file}")
-            except Exception as e:
-                print(f"Nuclear cleanup error: {e}")
+    # 3. Collect active files and temp files with lock
+    async with FILE_LOCK:
+        # Add active files and directory temp files
+        files_to_clean.update({os.path.abspath(f) for f in ACTIVE_FILES})
+        files_to_clean.update({os.path.abspath(str(f)) for f in Path(".").glob("temp_*.mp3")})
+        ACTIVE_FILES.clear()
 
-    if cleaned > 0:
-        response.append(f"🧹 Cleared {cleaned} speech tasks")
+    # 4. Process all files in single pass
+    cleaned_count = 0
+    for file_path in files_to_clean:
+        if safe_delete(file_path):
+            cleaned_count += 1
+        else:
+            print(f"⚠️ Immediate cleanup failed for {file_path}")
+            failed_files.add(file_path)
+            # Schedule background cleanup for this specific file
+            asyncio.create_task(background_cleanup(file_path))
+
+    # 5. Force-clear current tracking
+    CURRENT_FILE = None
+    CURRENT_TASK = None
+
+    # 6. Windows-specific process cleanup
+    if os.name == 'nt':
+        subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe', '/T'],
+                      stdout=subprocess.DEVNULL,
+                      stderr=subprocess.DEVNULL)
+
+    # 7. Build response
+    if cleaned_count > 0:
+        response.append(f"🧹 Cleared {cleaned_count} speech tasks")
     
-    await interaction.response.send_message("\n".join(response) if response else "❌ Queue was empty", ephemeral=True)
+    final_response = "\n".join(response) or "❌ Nothing to clean"
+    await interaction.followup.send(final_response, ephemeral=True)
 
 
 async def generate_audio(task: dict) -> discord.FFmpegPCMAudio:
-    global CURRENT_FILE, CURRENT_TASK
+    global CURRENT_FILE, CURRENT_TASK, FILE_LOCK
     start_time = time.time()
     safe_message = windows_escape(task["content"])
     output_file = task.get("debug_mp3") or task.get("debug_wav")
     service = task.get("service", "edge")
+    
+    async with FILE_LOCK:
+        ACTIVE_FILES.add(output_file)
+        print(f"📁 Added to active files: {output_file}")
 
     try:
         if service == "gtts":
@@ -498,16 +583,21 @@ async def generate_audio(task: dict) -> discord.FFmpegPCMAudio:
     except asyncio.CancelledError:
         if output_file and os.path.exists(output_file):
             try:
-                os.remove(output_file)
+                safe_delete(output_file)
                 print(f"🌀 Cancelled task cleaned: {output_file}")
             except Exception as e:
                 print(f"🌀 Cancellation cleanup error: {e}")
         raise
+    except Exception as e:
+        print(f"❌ Generation error: {str(e)}")
+        raise
     finally:
+        async with FILE_LOCK:
+            if output_file in ACTIVE_FILES:
+                ACTIVE_FILES.remove(output_file)
+                print(f"🗑️ Removed from active files: {output_file}")
+
         print(f"Audio generation took: {time.time() - start_time:.2f}s")
-        if output_file == CURRENT_FILE:
-            CURRENT_FILE = None
-            CURRENT_TASK = None
 
 def build_gtts_command(task: dict, safe_message: str) -> str:
     """Build absolute path gTTS command with verification"""
@@ -547,18 +637,17 @@ def build_edge_command(task: dict, safe_message: str) -> str:
 
 async def process_queue():
     global IS_PLAYING, CURRENT_FILE, CURRENT_TASK, QUEUE_LOCK
-    if not QUEUE_LOCK:  # Safety check
+    if not QUEUE_LOCK:
         print("Queue lock not initialized!")
         return
     async with QUEUE_LOCK:
         voice_client = bot.get_guild(GUILD_ID).voice_client
         if not voice_client or not voice_client.is_connected():
-            # Nuclear cleanup if disconnected
             for task, future in tts_queue:
                 output_file = task.get("debug_mp3") or task.get("debug_wav")
                 if output_file and os.path.exists(output_file):
                     try:
-                        os.remove(output_file)
+                        safe_delete(output_file)
                         print(f"⚠️ Disconnect cleanup: {output_file}")
                     except Exception as e:
                         print(f"Disconnect cleanup error: {e}")
@@ -569,29 +658,48 @@ async def process_queue():
         if tts_queue and not IS_PLAYING:
             IS_PLAYING = True
             task, future = tts_queue.pop(0)
-            CURRENT_FILE = task.get("debug_mp3") or task.get("debug_wav")
-            CURRENT_TASK = task
             
             try:
                 source = await future
+                CURRENT_FILE = task.get("debug_mp3") or task.get("debug_wav")
+                CURRENT_TASK = task
                 
                 def cleanup(error):
-                    global IS_PLAYING, CURRENT_FILE, CURRENT_TASK
-                    IS_PLAYING = False
-                    
-                    if CURRENT_FILE and os.path.exists(CURRENT_FILE):
-                        try:
-                            os.remove(CURRENT_FILE)
-                            print(f"♻️ Natural cleanup: {CURRENT_FILE}")
-                        except Exception as e:
-                            print(f"Natural cleanup error: {e}")
-                    
+                    global CURRENT_FILE, CURRENT_TASK, ACTIVE_FILES, IS_PLAYING
+                    file_to_clean = CURRENT_FILE
+                    task_content = CURRENT_TASK["content"][:50] if CURRENT_TASK else "Unknown"
+
                     CURRENT_FILE = None
                     CURRENT_TASK = None
-                    asyncio.run_coroutine_threadsafe(process_queue(), bot.loop)
-                
-                voice_client.play(source, after=cleanup)
-                print(f"Now playing: \"{task['content'][:50]}\"...")
+                    IS_PLAYING = False
+
+                    async def async_cleanup():
+                        try:
+                            if file_to_clean:
+                                if safe_delete(file_to_clean):
+                                    print(f"♻️ Cleaned '{task_content}' -> {file_to_clean}")
+                                else:
+                                    print(f"⏳ Retrying cleanup for {file_to_clean}")
+                                    await asyncio.sleep(1)
+                                    safe_delete(file_to_clean)
+                                
+                                async with FILE_LOCK:
+                                    if file_to_clean in ACTIVE_FILES:
+                                        ACTIVE_FILES.remove(file_to_clean)
+                        except Exception as e:
+                            print(f"🚨 Cleanup error: {str(e)}")
+                        finally:
+                            await process_queue()
+
+                    if file_to_clean:
+                        asyncio.run_coroutine_threadsafe(async_cleanup(), bot.loop)
+
+                try:
+                    voice_client.play(source, after=cleanup)
+                    print(f"Now playing: \"{task['content'][:50]}\"...")
+                except discord.ClientException as e:
+                    print(f"🚨 Playback error: {str(e)}")
+                    cleanup(error=e)
                 
             except Exception as e:
                 print(f"Error generating audio: {str(e)}")
@@ -863,7 +971,7 @@ async def on_voice_state_update(member, before, after):
                     output_file = task.get("debug_mp3") or task.get("debug_wav")
                     if output_file and os.path.exists(output_file):
                         try:
-                            os.remove(output_file)
+                            safe_delete(output_file)
                         except Exception as e:
                             print(f"Error cleaning file: {e}")
                 tts_queue.clear()
@@ -892,7 +1000,7 @@ async def handle_reconnection_sequence():
                 output_file = task.get("debug_mp3") or task.get("debug_wav")
                 if output_file and os.path.exists(output_file):
                     try:
-                        os.remove(output_file)
+                        safe_delete(output_file)
                     except Exception as e:
                         print(f"Error cleaning file: {e}")
             tts_queue.clear()
