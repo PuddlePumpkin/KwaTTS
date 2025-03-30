@@ -1039,7 +1039,7 @@ DEFAULT_USER_CONFIG = {
     "ignoreme": False,
     "service": "edge",  # Unified service field
     "gtts_tld": "us",
-    "selected_edge_voice": None,
+    "selected_edge_voice": "en-GB-RyanNeural",
     "edgepitch": 0,
     "edgevolume": 0,
     "volume": 100
