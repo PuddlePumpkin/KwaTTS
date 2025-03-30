@@ -1,0 +1,34 @@
+[
+  {
+    "accent": "Australian",
+    "tld": "com.au"
+  },
+  {
+    "accent": "English",
+    "tld": "co.uk"
+  },
+  {
+    "accent": "American",
+    "tld": "us"
+  },
+  {
+    "accent": "Canadian",
+    "tld": "ca"
+  },
+  {
+    "accent": "Indian",
+    "tld": "co.in"
+  },
+  {
+    "accent": "Irish",
+    "tld": "ie"
+  },
+  {
+    "accent": "South African",
+    "tld": "co.za"
+  },
+  {
+    "accent": "Nigerian",
+    "tld": "com.ng"
+  }
+]

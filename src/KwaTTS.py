@@ -173,10 +173,7 @@ def load_server_config():
     except KeyError as e:
         sys.exit(f"❌ Missing key in serverconfig.json: {e}")
 
-# Load Edge TTS voices
-with open('./src/edgettsvoices.json', 'r') as f:
-    edge_voices_data = json.load(f)
-edge_voices = list(edge_voices_data.keys())
+
 
 # Load server configuration
 try:
@@ -236,16 +233,25 @@ async def attempt_reconnection():
         print("❌ Max reconnect attempts reached")
         return False
 
+# Load TTS voices
+with open('./EdgeVoicesSimplified.json', 'r') as f:
+    edge_voices_data = json.load(f)
+
+# Load GTTS voices 
+with open('./GttsVoices.json', 'r') as f:
+    gtts_voices_data = json.load(f)
+
 # ----------------------------------
 # Change Voice Edge Command
 # ----------------------------------
 @bot.tree.command(name="change_voice_edge", description="Set your Edge TTS voice", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(voice="The Edge TTS voice to use")
 async def changevoiceedge(interaction: discord.Interaction, voice: str):
-    global edge_voices
-    if voice not in edge_voices:
+    # Check if the selected display name exists in our voice data
+    if voice not in edge_voices_data.values():
         await interaction.response.send_message(f"Invalid voice: {voice}", ephemeral=True)
         return
+    
     await interaction.response.send_message(f"Edge voice set to {voice}", ephemeral=True)
     userconfig = load_user_config(str(interaction.user.id))
     userconfig["service"] = "edge"
@@ -254,11 +260,41 @@ async def changevoiceedge(interaction: discord.Interaction, voice: str):
 
 @changevoiceedge.autocomplete("voice")
 async def edge_voice_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
-    global edge_voices
+    global edge_voices_data
     return [
-        app_commands.Choice(name=voice, value=voice)
-        for voice in edge_voices
-        if current.lower() in voice.lower()
+        app_commands.Choice(name=display_name, value=full_id)
+        for display_name, full_id in edge_voices_data.items()
+        if current.lower() in display_name.lower()
+    ][:25]
+
+# ----------------------------------
+# Change Voice GTTS Command
+# ----------------------------------
+@bot.tree.command(name="change_voice_gtts", description="Switch to Google TTS with specified accent", guild=discord.Object(id=GUILD_ID))
+@app_commands.describe(accent="Accent for voice")
+async def changevoicegtts(interaction: discord.Interaction, accent: str):
+    # Validate against actual TLDs from JSON
+    valid_tlds = [v["tld"] for v in gtts_voices_data]
+    if accent not in valid_tlds:
+        await interaction.response.send_message(f"Invalid accent: {accent}", ephemeral=True)
+        return
+    
+    userconfig = load_user_config(str(interaction.user.id))
+    userconfig["service"] = "gtts"
+    userconfig["gtts_tld"] = accent.lower()
+    save_user_config(str(interaction.user.id), userconfig)
+    await interaction.response.send_message(
+        f"Switched to Google TTS with {accent} domain", 
+        ephemeral=True
+    )
+
+@changevoicegtts.autocomplete("accent")
+async def gtts_voice_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
+    global gtts_voices_data
+    return [
+        app_commands.Choice(name=voice["accent"], value=voice["tld"])
+        for voice in gtts_voices_data
+        if current.lower() in voice["accent"].lower() or current.lower() in voice["tld"].lower()
     ][:25]
 
 # ----------------------------------
@@ -379,21 +415,6 @@ async def leave(interaction: discord.Interaction):
         print(f"✅ Left voice channel: {voice_client.channel.name}")
     else:
         print("❌ Bot is not in a voice channel")
-
-# ----------------------------------
-# gtts Command
-# ----------------------------------
-@bot.tree.command(name="change_voice_gtts", description="Switch to Google TTS with optional country TLD", guild=discord.Object(id=GUILD_ID))
-@app_commands.describe(tldendpoint="Country TLD for accent (e.g. 'co.uk' for British English)")
-async def changevoicegtts(interaction: discord.Interaction, tldendpoint: str = "com"):
-    userconfig = load_user_config(str(interaction.user.id))
-    userconfig["service"] = "gtts"
-    userconfig["gtts_tld"] = tldendpoint.lower()
-    save_user_config(str(interaction.user.id), userconfig)
-    await interaction.response.send_message(
-        f"Switched to Google TTS with {tldendpoint} domain", 
-        ephemeral=True
-    )
 
     
 def windows_escape(text):
