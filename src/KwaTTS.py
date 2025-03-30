@@ -234,7 +234,7 @@ async def attempt_reconnection():
         return False
 
 # Load TTS voices
-with open('./src/VoicesSimplified.json', 'r') as f:
+with open('./src/EdgeVoicesSimplified.json', 'r') as f:
     edge_voices_data = json.load(f)
 
 # Load GTTS voices 
