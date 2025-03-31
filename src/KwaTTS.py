@@ -889,6 +889,11 @@ def clean_special_content(content: str) -> str:
     content = re.sub(r'<(a?):(\w+):\d+>', r'emoji \2', content)
     # Replace URLs with "link"
     content = re.sub(r'https?://\S+|www\.\S+', 'a link', content, flags=re.IGNORECASE)
+
+    # Demojize Normal Emoji
+    content = emoji.demojize(content)
+    content = re.sub(r':(\w+):', lambda m: m.group(1).replace('_', ' '), content)
+
     # Replace newlines with pause indicator
     content = re.sub(r'(\n|\\n)+', '... ', content)
     return content.strip()
