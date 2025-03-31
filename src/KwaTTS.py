@@ -888,7 +888,7 @@ def clean_special_content(content: str) -> str:
     # Replace custom emojis with their name
     content = re.sub(r'<(a?):(\w+):\d+>', r'emoji \2', content)
     # Replace URLs with "link"
-    content = re.sub(r'https?://\S+|www\.\S+', 'uh link', content, flags=re.IGNORECASE)
+    content = re.sub(r'https?://\S+|www\.\S+', 'a link', content, flags=re.IGNORECASE)
     # Replace newlines with pause indicator
     content = re.sub(r'(\n|\\n)+', '... ', content)
     return content.strip()
