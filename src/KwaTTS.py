@@ -803,6 +803,8 @@ async def on_message(message):
                            if att.content_type and att.content_type.startswith('image/')]
         file_attachments = [att for att in message.attachments 
                           if att not in image_attachments]
+        stickers = [sticker.name for sticker in message.stickers]
+        sticker_count = len(stickers)
         member = message.guild.get_member(int(message.author.id))
         display_name = member.display_name if member else "User"
 
@@ -810,7 +812,7 @@ async def on_message(message):
         image_count = len(image_attachments)
         file_count = len(file_attachments)
         code_count = 1 if has_code else 0
-        total_attachments = image_count + file_count + code_count
+        total_attachments = image_count + file_count + code_count + sticker_count
         is_long_message = len(processed_content) > 400
 
         # Build specific description
@@ -822,6 +824,8 @@ async def on_message(message):
                 specific_attachment = "a file"
             elif has_code:
                 specific_attachment = "a code block"
+            elif sticker_count == 1:
+            specific_attachment = f"a sticker: {stickers[0]}"
         
         # Message construction
         final_content = ""
