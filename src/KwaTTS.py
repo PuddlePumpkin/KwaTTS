@@ -825,7 +825,7 @@ async def on_message(message):
             elif has_code:
                 specific_attachment = "a code block"
             elif sticker_count == 1:
-            specific_attachment = f"a sticker: {stickers[0]}"
+                specific_attachment = f"a sticker: {stickers[0]}"
         
         # Message construction
         final_content = ""
