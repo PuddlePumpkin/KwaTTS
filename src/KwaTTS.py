@@ -268,6 +268,41 @@ async def edge_voice_autocomplete(interaction: discord.Interaction, current: str
     ][:25]
 
 # ----------------------------------
+# Change Voice Other Command (Admin)
+# ----------------------------------
+@bot.tree.command(name="changevoiceother", description="[Admin] Set another user's Edge TTS voice", guild=discord.Object(id=GUILD_ID))
+@app_commands.describe(
+    user="User to modify",
+    voice="The Edge TTS voice to use"
+)
+@app_commands.default_permissions(administrator=True)
+async def changevoiceother(interaction: discord.Interaction, user: discord.Member, voice: str):
+    # Verify administrator permissions
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You need administrator privileges to use this command.", ephemeral=True)
+        return
+
+    # Validate voice selection
+    if voice not in edge_voices_data.values():
+        await interaction.response.send_message(f"Invalid voice: {voice}", ephemeral=True)
+        return
+
+    # Update target user's config
+    userconfig = load_user_config(str(user.id))
+    userconfig["service"] = "edge"
+    userconfig["selected_edge_voice"] = voice
+    save_user_config(str(user.id), userconfig)
+
+    await interaction.response.send_message(
+        f"✅ {user.display_name}'s Edge voice has been set to {voice}",
+        ephemeral=True
+    )
+
+@changevoiceother.autocomplete("voice")
+async def edge_voice_other_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
+    # Reuse the same autocomplete as personal voice selection
+    return await edge_voice_autocomplete(interaction, current)
+# ----------------------------------
 # Change Voice GTTS Command
 # ----------------------------------
 @bot.tree.command(name="change_voice_gtts", description="Switch to Google TTS with specified accent", guild=discord.Object(id=GUILD_ID))
