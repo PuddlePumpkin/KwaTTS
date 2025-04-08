@@ -806,7 +806,10 @@ async def on_message(message):
         stickers = [sticker.name for sticker in message.stickers]
         sticker_count = len(stickers)
         member = message.guild.get_member(int(message.author.id))
-        display_name = member.display_name if member else "User"
+        raw_name = member.display_name if member else "User"
+        # Filter out non-alphabetic characters from the name
+        filtered_name = ''.join([c for c in raw_name if c.isalpha()])
+        display_name = filtered_name if filtered_name else "User"
 
         # Attachment counts
         image_count = len(image_attachments)
