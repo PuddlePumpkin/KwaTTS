@@ -699,17 +699,18 @@ async def process_queue():
     async with QUEUE_LOCK:
         voice_client = bot.get_guild(GUILD_ID).voice_client
         if not voice_client or not voice_client.is_connected():
-            for task, future in tts_queue:
-                output_file = task.get("debug_mp3") or task.get("debug_wav")
-                if output_file and os.path.exists(output_file):
-                    try:
-                        safe_delete(output_file)
-                        print(f"⚠️ Disconnect cleanup: {output_file}")
-                    except Exception as e:
-                        print(f"Disconnect cleanup error: {e}")
-            tts_queue.clear()
-            IS_PLAYING = False
             return
+            #for task, future in tts_queue:
+            #    output_file = task.get("debug_mp3") or task.get("debug_wav")
+            #    if output_file and os.path.exists(output_file):
+            #        try:
+            #            safe_delete(output_file)
+            #            print(f"⚠️ Disconnect cleanup: {output_file}")
+            #        except Exception as e:
+            #            print(f"Disconnect cleanup error: {e}")
+            #tts_queue.clear()
+            #IS_PLAYING = False
+            #return
             
         if tts_queue and not IS_PLAYING:
             IS_PLAYING = True
@@ -751,6 +752,7 @@ async def process_queue():
                         asyncio.run_coroutine_threadsafe(async_cleanup(), bot.loop)
 
                 try:
+                    await asyncio.sleep(0.1)
                     voice_client.play(source, after=cleanup)
                     print(f"Now playing: \"{task['content'][:50]}\"...")
                 except discord.ClientException as e:
@@ -1009,7 +1011,8 @@ async def on_voice_state_update(member, before, after):
     if member.id == bot.user.id:
         if before.channel and not after.channel:
             print("⚠️ Bot disconnected from voice channel")
-            
+            async with QUEUE_LOCK:
+                IS_PLAYING = False
             # Check if this was an intentional disconnect
             async with VOICE_STATE_LOCK:
                 if not CONNECTION_STATE:
@@ -1052,7 +1055,8 @@ async def handle_reconnection_sequence():
         return
     print("Starting reconnection sequence...")
     success = await attempt_reconnection()
-    
+    if success:
+        await process_queue()  # Process pending tasks after reconnecting
     if not success:
         # Notify in text channel
         channel = bot.get_channel(TEXT_CHANNEL_ID)
