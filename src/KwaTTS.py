@@ -717,6 +717,7 @@ async def process_queue():
             task, future = tts_queue.pop(0)
             
             try:
+                await asyncio.sleep(0.05)
                 source = await future
                 CURRENT_FILE = task.get("debug_mp3") or task.get("debug_wav")
                 CURRENT_TASK = task
@@ -752,7 +753,7 @@ async def process_queue():
                         asyncio.run_coroutine_threadsafe(async_cleanup(), bot.loop)
 
                 try:
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.05)
                     voice_client.play(source, after=cleanup)
                     print(f"Now playing: \"{task['content'][:50]}\"...")
                 except discord.ClientException as e:
