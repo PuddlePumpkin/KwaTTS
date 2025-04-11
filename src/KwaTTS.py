@@ -1025,6 +1025,7 @@ async def on_voice_state_update(member, before, after):
     # Handle human members leaving
     voice_client = member.guild.voice_client
     if voice_client and voice_client.is_connected():
+        await asyncio.sleep(10)  # 10-second cooldown
         # Check if there are any non-bot members left in the channel
         human_members = [m for m in voice_client.channel.members if not m.bot]
         if len(human_members) == 0:
