@@ -451,9 +451,7 @@ async def leave(interaction: discord.Interaction):
     else:
         print("❌ Bot is not in a voice channel")
 
-    
-def windows_escape(text):
-    return text.replace('"', '""').replace('^', '^^').replace('&', '^&')
+
 
 # ----------------------------------
 # Ready Event
@@ -597,7 +595,6 @@ async def clearqueue(interaction: discord.Interaction):
 async def generate_audio(task: dict) -> discord.FFmpegPCMAudio:
     global CURRENT_FILE, CURRENT_TASK, FILE_LOCK
     start_time = time.time()
-    safe_message = windows_escape(task["content"])
     output_file = task.get("debug_mp3") or task.get("debug_wav")
     service = task.get("service", "edge")
     
@@ -607,16 +604,15 @@ async def generate_audio(task: dict) -> discord.FFmpegPCMAudio:
 
     try:
         if service == "gtts":
-            command = build_gtts_command(task, safe_message)
+            command = build_gtts_command(task)
         elif service == "edge":
-            command = build_edge_command(task, safe_message)
+            command = build_edge_command(task)
 
-        proc = await asyncio.create_subprocess_shell(
-            command,
+        proc = await asyncio.create_subprocess_exec(
+            *command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        
         try:
             await asyncio.wait_for(proc.wait(), timeout=30)
         except asyncio.TimeoutError:
@@ -655,40 +651,36 @@ async def generate_audio(task: dict) -> discord.FFmpegPCMAudio:
 
         print(f"Audio generation took: {time.time() - start_time:.2f}s")
 
-def build_gtts_command(task: dict, safe_message: str) -> str:
-    """Build absolute path gTTS command with verification"""
-    tld = task.get("tld", "com")
-    
-    # Get path to virtual environment
+def build_gtts_command(task: dict) -> list:
+    """Build gTTS command as a list of arguments"""
     venv_path = Path(sys.executable).parent.parent
-    
-    # Platform-specific paths
+    tld = task.get("tld", "com")
     if platform.system() == "Windows":
         cli_path = venv_path / "Scripts" / "gtts-cli.exe"
     else:
         cli_path = venv_path / "bin" / "gtts-cli"
-    print(f"Final gtts-cli path: {cli_path}")  # Should show absolute path
-    print(f"File exists: {cli_path.exists()}")  # Must be True
-    # Verify executable exists
-    if not cli_path.exists():
-        raise RuntimeError(f"gtts-cli not found at {cli_path}\n"
-                          "Install with: pip install gtts")
     
-    return (
-        f'"{cli_path}" "{safe_message}" '
-        f'--tld {tld} --output "{task["debug_mp3"]}"'
-    )
+    if not cli_path.exists():
+        raise RuntimeError(f"gtts-cli not found at {cli_path}")
+    
+    return [
+        str(cli_path),
+        task["content"],
+        "--tld", tld,
+        "--output", task["debug_mp3"]
+    ]
 
-def build_edge_command(task: dict, safe_message: str) -> str:
-    """Build edge-tts command that works on all platforms"""
-    return (
-        f'"{sys.executable}" -m edge_tts '
-        f'--pitch {task["edgepitch"]:+}Hz '
-        f'--volume {task["edgevolume"]:+}% '
-        f'--voice "{task["edge_voice"]}" '
-        f'--text "{safe_message}" '
-        f'--write-media "{task["debug_mp3"]}"'
-    )
+
+def build_edge_command(task: dict) -> list:
+    """Build edge-tts command as a list of arguments"""
+    return [
+        sys.executable, "-m", "edge_tts",
+        "--pitch", f"{task['edgepitch']:+}Hz",
+        "--volume", f"{task['edgevolume']:+}%",
+        "--voice", task["edge_voice"],
+        "--text", task["content"],
+        "--write-media", task["debug_mp3"]
+    ]
 
 
 async def process_queue():
