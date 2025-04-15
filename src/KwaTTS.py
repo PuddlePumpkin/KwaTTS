@@ -811,6 +811,10 @@ async def on_message(message):
 
     if message.channel.id != TEXT_CHANNEL_ID or message.author.bot:
         return
+        
+    voice_client = message.guild.voice_client
+    if not (voice_client and voice_client.is_connected()):
+        return
 
     try:
         userconfig = load_user_config(str(message.author.id))
