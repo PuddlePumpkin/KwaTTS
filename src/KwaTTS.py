@@ -1000,50 +1000,58 @@ async def addacronym(interaction: discord.Interaction, acronym: str, translation
 @bot.event
 async def on_voice_state_update(member, before, after):
     global CONNECTION_STATE, VOICE_STATE_LOCK, LAST_VOICE_CHANNEL, QUEUE_LOCK
-
+    
+    print(f"DEBUG: on_voice_state_update triggered for {member.display_name}. Current CONNECTION_STATE: {CONNECTION_STATE}") # Log entry state
     if not QUEUE_LOCK:  # Safety check
         print("Queue lock not initialized!")
         return
 
+    # Check if the bot itself was disconnected
     if member.id == bot.user.id:
         if before.channel and not after.channel:
             print("⚠️ Bot disconnected from voice channel")
             async with QUEUE_LOCK:
                 IS_PLAYING = False
-            # Check if this was an intentional disconnect
+            
             async with VOICE_STATE_LOCK:
+                print(f"DEBUG: Bot disconnected. Checking CONNECTION_STATE. Value is: {CONNECTION_STATE}") # Log state before check
                 if not CONNECTION_STATE:
                     print("Clean disconnect, not reconnecting")
                     return
-                
                 # Maintain connection state for reconnect attempts
                 CONNECTION_STATE = True
-                
-            # Start reconnection in a new task
+            # Start reconnection
             asyncio.create_task(handle_reconnection_sequence())
 
-    # Handle human members leaving
+    # Handle human members leaving (only if the bot is connected)
     voice_client = member.guild.voice_client
-    if voice_client and voice_client.is_connected():
+    if voice_client and voice_client.is_connected() and member.id != bot.user.id:
         await asyncio.sleep(10)  # 10-second cooldown
-        # Check if there are any non-bot members left in the channel
-        human_members = [m for m in voice_client.channel.members if not m.bot]
-        if len(human_members) == 0:
-            # Disconnect and clean up
-            async with VOICE_STATE_LOCK:
-                CONNECTION_STATE = False
-                LAST_VOICE_CHANNEL = None
-            await voice_client.disconnect()
-            print("Left voice channel because it became empty.")
-            async with QUEUE_LOCK:
-                for task, future in tts_queue:
-                    output_file = task.get("debug_mp3") or task.get("debug_wav")
-                    if output_file and os.path.exists(output_file):
-                        try:
-                            safe_delete(output_file)
-                        except Exception as e:
-                            print(f"Error cleaning file: {e}")
-                tts_queue.clear()
+
+        # Get current voice client after delay
+        current_voice_client = member.guild.voice_client
+        if current_voice_client and current_voice_client.is_connected():
+            current_channel = current_voice_client.channel
+            human_members = [m for m in current_channel.members if not m.bot]
+            print(f"DEBUG: Human activity detected ({member.display_name}). Re-checking members in {current_channel.name}. Found {len(human_members)} humans.") # Log check
+
+            if len(human_members) == 0:
+                print(f"DEBUG: Entering 'leave because empty' block triggered by activity from {member.display_name}.") # Log entry to this block
+                async with VOICE_STATE_LOCK:
+                    print(f"DEBUG: Setting CONNECTION_STATE = False (Leave empty)") # Log state change
+                    CONNECTION_STATE = False
+                    LAST_VOICE_CHANNEL = None
+                await current_voice_client.disconnect()
+                print("Left voice channel because it became empty.")
+                async with QUEUE_LOCK:
+                    for task, future in tts_queue:
+                        output_file = task.get("debug_mp3") or task.get("debug_wav")
+                        if output_file and os.path.exists(output_file):
+                            try:
+                                safe_delete(output_file)
+                            except Exception as e:
+                                print(f"Error cleaning file: {e}")
+                    tts_queue.clear()
 
 async def handle_reconnection_sequence():
     global QUEUE_LOCK
