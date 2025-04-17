@@ -456,46 +456,22 @@ async def clearqueue(interaction: discord.Interaction):
 
 
 async def generate_audio(task: dict) -> discord.AudioSource:
-    """Generate audio entirely in memory using libraries"""
+    """Generate audio with streaming optimization"""
+    proc = None
     try:
         start_time = time.time()
         service = task.get("service", "edge")
         volume = task.get("user_volume", 100) / 100.0
 
-        if service == "gtts":
-            # Generate Google TTS directly to memory
-            tts = gTTS(
-                text=task["content"],
-                lang='en',
-                tld=task.get("tld", "com")
-            )
-            mp3_buffer = BytesIO()
-            tts.write_to_fp(mp3_buffer)
-            mp3_buffer.seek(0)
-            audio_data = mp3_buffer.read()
-        elif service == "edge":
-            # Generate Edge TTS directly to memory
-            communicate = edge_tts.Communicate(
-                text=task["content"],
-                voice=task["edge_voice"],
-                pitch=f"{task.get('edgepitch', 0):+}Hz",
-                volume=f"{task.get('edgevolume', 0):+}%"
-            )
-            audio_data = bytearray()
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    audio_data.extend(chunk["data"])
-            audio_data = bytes(audio_data)
-
-        # Process audio through FFmpeg in memory
+        # Common FFmpeg command
         ffmpeg_command = [
             'ffmpeg', '-nostdin', '-y',
-            '-i', 'pipe:0',             # Input from stdin
-            '-af', f'volume={volume}',  # Volume adjustment
-            '-f', 's16le',              # Output format
-            '-ar', '48000',             # Sample rate
-            '-ac', '2',                 # Stereo audio
-            'pipe:1'                    # Output to stdout
+            '-i', 'pipe:0',
+            '-af', f'volume={volume}',
+            '-f', 's16le',
+            '-ar', '48000',
+            '-ac', '2',
+            'pipe:1'
         ]
 
         proc = await asyncio.create_subprocess_exec(
@@ -505,18 +481,83 @@ async def generate_audio(task: dict) -> discord.AudioSource:
             stderr=asyncio.subprocess.PIPE
         )
 
-        # Feed audio data to FFmpeg and get processed PCM
-        stdout, stderr = await proc.communicate(input=audio_data)
-        if proc.returncode != 0:
-            raise RuntimeError(f"FFmpeg failed: {stderr.decode()}")
+        # Check if streams are available
+        if proc.stdin is None or proc.stdout is None:
+            raise RuntimeError("FFmpeg streams not initialized")
 
-        # Create PCM audio source from memory
+        if service == "gtts":
+            # Google TTS (single write)
+            tts = gTTS(
+                text=task["content"],
+                lang='en',
+                tld=task.get("tld", "com")
+            )
+            with BytesIO() as mp3_buffer:
+                tts.write_to_fp(mp3_buffer)
+                mp3_buffer.seek(0)
+                audio_data = mp3_buffer.read()
+                
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        proc.communicate(input=audio_data),
+                        timeout=30
+                    )
+                except asyncio.TimeoutError:
+                    await proc.kill()
+                    raise RuntimeError("gTTS processing timed out")
+
+        elif service == "edge":
+            # Edge TTS (streaming)
+            communicate = edge_tts.Communicate(
+                text=task["content"],
+                voice=task["edge_voice"],
+                pitch=f"{task.get('edgepitch', 0):+}Hz",
+                volume=f"{task.get('edgevolume', 0):+}%"
+            )
+
+            try:
+                # Stream audio to FFmpeg
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        proc.stdin.write(chunk["data"])
+                        await proc.stdin.drain()
+
+                # Close stdin properly
+                if not proc.stdin.is_closing():
+                    proc.stdin.close()
+                    await proc.stdin.wait_closed()
+
+            except asyncio.TimeoutError:
+                await proc.kill()
+                raise RuntimeError("Edge TTS streaming timed out")
+
+            # Get output
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=30
+            )
+
+        # Error checking
+        if proc.returncode != 0:
+            err_msg = stderr.decode().strip()
+            raise RuntimeError(f"FFmpeg failed ({proc.returncode}): {err_msg}")
+
         return discord.PCMAudio(BytesIO(stdout))
 
     except Exception as e:
         print(f"Generation error: {str(e)}")
+        if proc:
+            try:
+                await proc.kill()
+            except:
+                pass
         raise
     finally:
+        if proc:
+            try:
+                await proc.wait()
+            except:
+                pass
         print(f"Audio generation took: {time.time() - start_time:.2f}s")
 
 
