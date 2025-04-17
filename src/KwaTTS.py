@@ -203,7 +203,7 @@ async def edge_voice_autocomplete(interaction: discord.Interaction, current: str
 # ----------------------------------
 # Change Voice Other Command (Admin)
 # ----------------------------------
-@bot.tree.command(name="changevoiceother", description="[Admin] Set another user's Edge TTS voice", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="change_voice_other", description="[Admin] Set another user's Edge TTS voice", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(
     user="User to modify",
     voice="The Edge TTS voice to use"
@@ -281,6 +281,8 @@ async def usersettings(
         f"🔊 Volume set to {volume}%",
         ephemeral=True
     )
+
+
 
 # ----------------------------------
 # toggle ignoreme
@@ -563,47 +565,43 @@ async def generate_audio(task: dict) -> discord.AudioSource:
 
 async def process_queue():
     global IS_PLAYING, CURRENT_TASK, QUEUE_LOCK
-    if not QUEUE_LOCK:
-        print("Queue lock not initialized!")
-        return
-    async with QUEUE_LOCK:
-        voice_client = bot.get_guild(GUILD_ID).voice_client
-        if not voice_client or not voice_client.is_connected():
-            return
-            
-        if tts_queue and not IS_PLAYING:
+    while True:  # Continuous processing loop
+        async with QUEUE_LOCK:
+            voice_client = bot.get_guild(GUILD_ID).voice_client
+            if not voice_client or not voice_client.is_connected() or not tts_queue or IS_PLAYING:
+                await asyncio.sleep(0.1)
+                continue
+
             IS_PLAYING = True
             task, future = tts_queue.pop(0)
-            
-            try:
-                # await asyncio.sleep(0.05)
-                source = await future
-                CURRENT_TASK = task
-                
-                def cleanup(error):
-                    global IS_PLAYING
-                    IS_PLAYING = False
-                    if error:
-                        print(f"Playback error: {str(error)}")
-                    bot.loop.create_task(process_queue())
 
-                try:
-                    await asyncio.sleep(0.05)
-                    voice_client.play(source, after=cleanup)
-                    print(f"Now playing: \"{task['content'][:50]}\"...")
-                except discord.ClientException as e:
-                    print(f"🚨 Playback error: {str(e)}")
-                    cleanup(error=e)
-                
-            except Exception as e:
-                print(f"Error generating audio: {str(e)}")
-                traceback.print_exc()
+        try:
+            # Wait for the audio to be generated (non-blocking for other tasks)
+            source = await future
+            CURRENT_TASK = task
+
+            def cleanup(error):
+                global IS_PLAYING
+                IS_PLAYING = False
+                if error:
+                    print(f"Playback error: {str(error)}")
+                bot.loop.create_task(process_queue())
+
+            voice_client.play(source, after=cleanup)
+            print(f"Now playing: \"{task['content'][:50]}\"...")
+
+        except Exception as e:
+            print(f"Error processing task: {str(e)}")
+            traceback.print_exc()
+            async with QUEUE_LOCK:
+                IS_PLAYING = False
                 if task["retry_count"] < 3:
                     task["retry_count"] += 1
                     new_future = asyncio.create_task(generate_audio(task))
+                    new_future.add_done_callback(lambda f: bot.loop.create_task(process_queue()))
                     tts_queue.insert(0, (task, new_future))
-                IS_PLAYING = False
 
+        await asyncio.sleep(0.1)
 
 def filter_acronyms(content: str) -> str:
     global ACRONYM_CACHE, ACRONYM_LAST_MODIFIED
@@ -745,6 +743,7 @@ async def on_message(message):
 
         task = create_tts_task(final_content, userconfig)
         future = asyncio.create_task(generate_audio(task))
+        future.add_done_callback(lambda f: bot.loop.create_task(process_queue()))  # Add callback
         
         async with QUEUE_LOCK:
             tts_queue.append((task, future))
