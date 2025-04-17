@@ -285,7 +285,7 @@ async def usersettings(
 # ----------------------------------
 # Universal Settings Other Command (Admin)
 # ----------------------------------
-@bot.tree.command(name="universal_settings_other", description="[Admin] Adjust another user's TTS preferences", guild=discord.Object(id=GUILD_ID))
+@bot.tree.command(name="user_settings_other", description="[Admin] Adjust another user's TTS preferences", guild=discord.Object(id=GUILD_ID))
 @app_commands.describe(
     user="User to modify",
     volume="Output volume (0-100)",
@@ -294,7 +294,7 @@ async def usersettings(
     volumeoffset="Edge TTS volume offset (-50 to 50)"
 )
 @app_commands.default_permissions(administrator=True)
-async def universal_settings_other(
+async def user_settings_other(
     interaction: discord.Interaction,
     user: discord.Member,
     volume: app_commands.Range[int, 0, 100] = None,
