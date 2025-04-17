@@ -282,7 +282,62 @@ async def usersettings(
         ephemeral=True
     )
 
+# ----------------------------------
+# Universal Settings Other Command (Admin)
+# ----------------------------------
+@bot.tree.command(name="user_settings_other", description="[Admin] Adjust another user's TTS preferences", guild=discord.Object(id=GUILD_ID))
+@app_commands.describe(
+    user="User to modify",
+    volume="Output volume (0-100)",
+    ignoreme="Whether to ignore their messages",
+    pitchoffset="Edge TTS pitch offset (-30 to 30)",
+    volumeoffset="Edge TTS volume offset (-50 to 50)"
+)
+@app_commands.default_permissions(administrator=True)
+async def user_settings_other(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    volume: Optional[app_commands.Range[int, 0, 100]] = None,
+    ignoreme: Optional[bool] = None,
+    pitchoffset: Optional[app_commands.Range[int, -30, 30]] = None,
+    volumeoffset: Optional[app_commands.Range[int, -50, 50]] = None
+):
+    # Verify administrator permissions
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "❌ You need administrator privileges to use this command.",
+            ephemeral=True
+        )
+        return
 
+    # Load target user's config
+    userconfig = load_user_config(str(user.id))
+    changes = []
+
+    # Update each provided parameter
+    if volume is not None:
+        userconfig["volume"] = volume
+        changes.append(f"🔊 Volume: {volume}%")
+    if ignoreme is not None:
+        userconfig["ignoreme"] = ignoreme
+        changes.append(f"👤 IgnoreMe: {'Enabled' if ignoreme else 'Disabled'}")
+    if pitchoffset is not None:
+        userconfig["edgepitch"] = pitchoffset
+        changes.append(f"🎚️ Edge Pitch Offset: {pitchoffset:+}")
+    if volumeoffset is not None:
+        userconfig["edgevolume"] = volumeoffset
+        changes.append(f"🔈 Edge Volume Offset: {volumeoffset:+}%")
+
+    # Save changes
+    save_user_config(str(user.id), userconfig)
+
+    # Prepare response
+    if not changes:
+        response = "No changes specified."
+    else:
+        response = f"✅ Updated settings for {user.display_name}:\n" + "\n".join(changes)
+    
+    await interaction.response.send_message(response, ephemeral=True)
 
 # ----------------------------------
 # toggle ignoreme
