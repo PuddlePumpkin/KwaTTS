@@ -39,6 +39,7 @@ CURRENT_FILE = None
 CURRENT_TASK = None
 ACTIVE_FILES = set()
 FILE_LOCK = asyncio.Lock()
+keepalive_task = None
 
 def is_file_locked(filepath):
     try:
@@ -392,7 +393,7 @@ async def edgesettings(
 # ----------------------------------
 @bot.tree.command(name="join", description="Requests bot to join voice", guild=discord.Object(id=GUILD_ID))
 async def join(interaction: discord.Interaction):
-    global CONNECTION_STATE, LAST_VOICE_CHANNEL, RECONNECT_ATTEMPTS
+    global CONNECTION_STATE, LAST_VOICE_CHANNEL, RECONNECT_ATTEMPTS, keepalive_task
     await interaction.response.send_message(f"Requested join...", ephemeral=True)
     try:
         channel = bot.get_channel(VOICE_CHANNEL_ID)
@@ -413,6 +414,10 @@ async def join(interaction: discord.Interaction):
                 LAST_VOICE_CHANNEL = channel
                 RECONNECT_ATTEMPTS = 0
             print(f"Connected to voice: {channel.name}")
+            # Start keepalive
+            if keepalive_task:
+                keepalive_task.cancel()
+            keepalive_task = asyncio.create_task(voice_keepalive(voice_client))
         else:
             print("❌ Voice channel not found")
     except Exception as e:
@@ -423,13 +428,18 @@ async def join(interaction: discord.Interaction):
 # ----------------------------------
 @bot.tree.command(name="leave", description="Requests bot to leave voice", guild=discord.Object(id=GUILD_ID))
 async def leave(interaction: discord.Interaction):
-    global CONNECTION_STATE, LAST_VOICE_CHANNEL, QUEUE_LOCK
+    global CONNECTION_STATE, LAST_VOICE_CHANNEL, QUEUE_LOCK, keepalive_task
     if not QUEUE_LOCK:  # Safety check
         print("Queue lock not initialized!")
         return
     await interaction.response.send_message(f"Requested leave...", ephemeral=True)
     voice_client = interaction.guild.voice_client
     if voice_client and voice_client.is_connected():
+        # Stop keepalive
+        if keepalive_task:
+            keepalive_task.cancel()
+            keepalive_task = None
+            
         async with VOICE_STATE_LOCK:
             CONNECTION_STATE = False
             LAST_VOICE_CHANNEL = None
@@ -1172,6 +1182,17 @@ def save_user_config(userid: str, config: dict):
     
     with open('./config/usersettings.json', 'w') as f:
         json.dump(userconfigs, f, indent=4)
+
+
+async def voice_keepalive(voice_client):
+    """Keeps voice connection alive with proper silence packets"""
+    print("🔊 Starting voice keepalive")
+    while voice_client.is_connected():
+        if not voice_client.is_playing():
+            # Send valid OPUS silence frame
+            voice_client.send_audio_packet(b'\xF8\xFF\xFE', encode=False)
+        await asyncio.sleep(15)
+    print("🔊 Ending voice keepalive")
 
 # ----------------------------------
 # Main Command
