@@ -13,7 +13,9 @@ import platform
 import signal
 import emoji
 import psutil
-import subprocess
+from io import BytesIO
+import edge_tts
+from gtts import gTTS
 
 from typing import List
 from pathlib import Path
@@ -35,62 +37,8 @@ LAST_VOICE_CHANNEL = None
 RECONNECT_ATTEMPTS = 0
 MAX_RECONNECT_ATTEMPTS = 3
 VOICE_STATE_LOCK = None
-CURRENT_FILE = None
 CURRENT_TASK = None
-ACTIVE_FILES = set()
-FILE_LOCK = asyncio.Lock()
 keepalive_task = None
-
-def is_file_locked(filepath):
-    try:
-        for proc in psutil.process_iter():
-            try:
-                files = proc.open_files()
-                if files:
-                    for f in files:
-                        if f.path == os.path.abspath(filepath):
-                            return True
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        return False
-    except Exception as e:
-        print(f"🔒 File lock check error: {str(e)}")
-        return False
-
-def safe_delete(path, max_retries=5, initial_delay=0.1):
-    for i in range(max_retries):
-        try:
-            if os.path.exists(path):
-                # Check if FFmpeg still has the file open
-                for proc in psutil.process_iter():
-                    try:
-                        if "ffmpeg" in proc.name().lower():
-                            if path in [f.path for f in proc.open_files()]:
-                                if i == 0:
-                                    print(f"🔒 FFmpeg still has {path} open")
-                                continue
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        pass
-                
-                os.remove(path)
-                print(f"✅ Successfully deleted {path} (attempt {i+1})")
-                return True
-        except Exception as e:
-            if i == max_retries - 1:
-                print(f"❌ Final deletion failed for {path}: {str(e)}")
-                return False
-            time.sleep(initial_delay * (2 ** i))  # Exponential backoff
-    return False
-
-async def orphan_file_check():
-    while True:
-        await asyncio.sleep(300)  # 5 minutes
-        async with FILE_LOCK:
-            for f in list(ACTIVE_FILES):
-                if os.path.exists(f):
-                    print(f"⚠️ Orphan file detected: {f}")
-                    safe_delete(f)
-                ACTIVE_FILES.discard(f)
 
 async def graceful_shutdown(signame=None):
     """Handle all shutdown tasks properly"""
@@ -102,14 +50,6 @@ async def graceful_shutdown(signame=None):
         print("Queue lock not initialized!")
         return
     async with QUEUE_LOCK:
-        for task, future in tts_queue:
-            output_file = task.get("debug_mp3") or task.get("debug_wav")
-            if output_file and os.path.exists(output_file):
-                try:
-                    safe_delete(output_file)
-                    print(f"Cleaned queued file: {output_file}")
-                except Exception as e:
-                    print(f"Error cleaning {output_file}: {str(e)}")
         tts_queue.clear()
     
     # Disconnect from all voice channels
@@ -123,14 +63,6 @@ async def graceful_shutdown(signame=None):
     if not bot.is_closed():
         await bot.close()
         print("Closed Discord connection")
-    
-    # Cleanup temporary files
-    for file in Path(".").glob("temp_*.mp3"):
-        try:
-            file.unlink()
-            print(f"Cleaned up temp file: {file}")
-        except Exception as e:
-            print(f"Error cleaning {file}: {str(e)}")
     
     # Exit the program
     sys.exit(0)
@@ -439,21 +371,13 @@ async def leave(interaction: discord.Interaction):
         if keepalive_task:
             keepalive_task.cancel()
             keepalive_task = None
-            
+
         async with VOICE_STATE_LOCK:
             CONNECTION_STATE = False
             LAST_VOICE_CHANNEL = None
         
         # Cleanup queued files
         async with QUEUE_LOCK:
-            for task, future in tts_queue:
-                output_file = task.get("debug_mp3") or task.get("debug_wav")
-                if output_file and os.path.exists(output_file):
-                    try:
-                        safe_delete(output_file)
-                        print(f"Cleaned queued file: {output_file}")
-                    except Exception as e:
-                        print(f"Error cleaning {output_file}: {str(e)}")
             tts_queue.clear()
         
         await voice_client.disconnect()
@@ -482,7 +406,6 @@ async def on_ready():
         print(f"✅ Synced commands: {[cmd.name for cmd in synced]}")
     except Exception as e:
         print(f"❌ Failed to sync commands: {e}")
-    bot.loop.create_task(orphan_file_check())
 
 
 # ----------------------------------
@@ -499,202 +422,106 @@ async def stopreading(interaction: discord.Interaction):
     if voice_client.is_playing():
         voice_client.stop()
         response.append("⏹️ Stopped current playback")
-        
-        # Immediate cleanup
-        if CURRENT_FILE and os.path.exists(CURRENT_FILE):
-            try:
-                safe_delete(CURRENT_FILE)
-                response.append("🧹 Cleaned current file")
-            except Exception as e:
-                print(f"Stopreading cleanup error: {e}")
     
     await interaction.response.send_message("\n".join(response) if response else "❌ No audio playing", ephemeral=True)
-
-async def background_cleanup(path):
-    """Dedicated cleanup for specific problematic file"""
-    target = os.path.abspath(path)
-    print(f"🔁 Starting background cleanup for {target}")
-    
-    for i in range(10):
-        if not os.path.exists(target):
-            print(f"🏁 Background cleanup: {target} already gone")
-            return
-            
-        if safe_delete(target):
-            return
-            
-        await asyncio.sleep(5)  # Longer delays between attempts
-    
-    print(f"🚨 Permanent failure: Could not delete {target}")
 
 # ----------------------------------
 # Clearqueue Command (stop + clear queue)
 # ----------------------------------
 @bot.tree.command(name="clear_queue", description="Empty the message queue and stop playback", guild=discord.Object(id=GUILD_ID))
 async def clearqueue(interaction: discord.Interaction):
-    global IS_PLAYING, CURRENT_FILE, CURRENT_TASK, QUEUE_LOCK, ACTIVE_FILES
+    global IS_PLAYING, QUEUE_LOCK
     
-    # Immediately defer the response to prevent timeout
     await interaction.response.defer(ephemeral=True)
-    
     voice_client = interaction.guild.voice_client
+    
     if not voice_client or not voice_client.is_connected():
         await interaction.followup.send("❌ Bot is not connected to voice.", ephemeral=True)
         return
 
-    response = []
-    files_to_clean = set()
-    failed_files = set()
-
-    # 1. Stop playback and capture initial files
-    if voice_client.is_playing() or voice_client.is_paused():
-        voice_client.stop()
-        response.append("⏹️ Stopped current playback")
-        if CURRENT_FILE:
-            files_to_clean.add(os.path.abspath(CURRENT_FILE))
-
-    # 2. Collect queued files with lock
     async with QUEUE_LOCK:
-        # Cancel pending tasks and collect files
-        for task, future in tts_queue:
-            output_file = task.get("debug_mp3") or task.get("debug_wav")
-            if output_file:
-                files_to_clean.add(os.path.abspath(output_file))
+        # Cancel all pending tasks
+        for _, future in tts_queue:
             if not future.done():
                 future.cancel()
-        
         tts_queue.clear()
+        
+        # Stop current playback
+        if voice_client.is_playing():
+            voice_client.stop()
+            
         IS_PLAYING = False
 
-    # 3. Collect active files and temp files with lock
-    async with FILE_LOCK:
-        # Add active files and directory temp files
-        files_to_clean.update({os.path.abspath(f) for f in ACTIVE_FILES})
-        files_to_clean.update({os.path.abspath(str(f)) for f in Path(".").glob("temp_*.mp3")})
-        ACTIVE_FILES.clear()
-
-    # 4. Process all files in single pass
-    cleaned_count = 0
-    for file_path in files_to_clean:
-        if safe_delete(file_path):
-            cleaned_count += 1
-        else:
-            print(f"⚠️ Immediate cleanup failed for {file_path}")
-            failed_files.add(file_path)
-            # Schedule background cleanup for this specific file
-            asyncio.create_task(background_cleanup(file_path))
-
-    # 5. Force-clear current tracking
-    CURRENT_FILE = None
-    CURRENT_TASK = None
-
-    # 6. Windows-specific process cleanup
-    if os.name == 'nt':
-        subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe', '/T'],
-                      stdout=subprocess.DEVNULL,
-                      stderr=subprocess.DEVNULL)
-
-    # 7. Build response
-    if cleaned_count > 0:
-        response.append(f"🧹 Cleared {cleaned_count} speech tasks")
-    
-    final_response = "\n".join(response) or "❌ Nothing to clean"
-    await interaction.followup.send(final_response, ephemeral=True)
+    await interaction.followup.send("✅ Queue cleared and playback stopped", ephemeral=True)
 
 
-async def generate_audio(task: dict) -> discord.FFmpegPCMAudio:
-    global CURRENT_FILE, CURRENT_TASK, FILE_LOCK
-    start_time = time.time()
-    output_file = task.get("debug_mp3") or task.get("debug_wav")
-    service = task.get("service", "edge")
-    
-    async with FILE_LOCK:
-        ACTIVE_FILES.add(output_file)
-        print(f"📁 Added to active files: {output_file}")
-
+async def generate_audio(task: dict) -> discord.AudioSource:
+    """Generate audio entirely in memory using libraries"""
     try:
+        start_time = time.time()
+        service = task.get("service", "edge")
+        volume = task.get("user_volume", 100) / 100.0
+
         if service == "gtts":
-            command = build_gtts_command(task)
+            # Generate Google TTS directly to memory
+            tts = gTTS(
+                text=task["content"],
+                lang='en',
+                tld=task.get("tld", "com")
+            )
+            mp3_buffer = BytesIO()
+            tts.write_to_fp(mp3_buffer)
+            mp3_buffer.seek(0)
+            audio_data = mp3_buffer.read()
         elif service == "edge":
-            command = build_edge_command(task)
+            # Generate Edge TTS directly to memory
+            communicate = edge_tts.Communicate(
+                text=task["content"],
+                voice=task["edge_voice"],
+                pitch=f"{task.get('edgepitch', 0):+}Hz",
+                volume=f"{task.get('edgevolume', 0):+}%"
+            )
+            audio_data = bytearray()
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    audio_data.extend(chunk["data"])
+            audio_data = bytes(audio_data)
+
+        # Process audio through FFmpeg in memory
+        ffmpeg_command = [
+            'ffmpeg', '-nostdin', '-y',
+            '-i', 'pipe:0',             # Input from stdin
+            '-af', f'volume={volume}',  # Volume adjustment
+            '-f', 's16le',              # Output format
+            '-ar', '48000',             # Sample rate
+            '-ac', '2',                 # Stereo audio
+            'pipe:1'                    # Output to stdout
+        ]
 
         proc = await asyncio.create_subprocess_exec(
-            *command,
+            *ffmpeg_command,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=30)
-        except asyncio.TimeoutError:
-            proc.kill()
-            raise RuntimeError("Audio generation timed out after 30 seconds")
 
+        # Feed audio data to FFmpeg and get processed PCM
+        stdout, stderr = await proc.communicate(input=audio_data)
         if proc.returncode != 0:
-            stderr = await proc.stderr.read()
-            raise RuntimeError(f"Command failed ({proc.returncode}): {stderr.decode().strip()}")
+            raise RuntimeError(f"FFmpeg failed: {stderr.decode()}")
 
-        if not os.path.exists(output_file) or os.path.getsize(output_file) == 0:
-            raise RuntimeError(f"Audio file not generated or empty: {output_file}")
+        # Create PCM audio source from memory
+        return discord.PCMAudio(BytesIO(stdout))
 
-        volume = task.get("user_volume", 100) / 100.0
-        return discord.FFmpegPCMAudio(
-            output_file,
-            options=f'-af "volume={volume:.2f}"'
-        )
-
-    except asyncio.CancelledError:
-        if output_file and os.path.exists(output_file):
-            try:
-                safe_delete(output_file)
-                print(f"🌀 Cancelled task cleaned: {output_file}")
-            except Exception as e:
-                print(f"🌀 Cancellation cleanup error: {e}")
-        raise
     except Exception as e:
-        print(f"❌ Generation error: {str(e)}")
+        print(f"Generation error: {str(e)}")
         raise
     finally:
-        async with FILE_LOCK:
-            if output_file in ACTIVE_FILES:
-                ACTIVE_FILES.remove(output_file)
-                print(f"🗑️ Removed from active files: {output_file}")
-
         print(f"Audio generation took: {time.time() - start_time:.2f}s")
-
-def build_gtts_command(task: dict) -> list:
-    """Build gTTS command as a list of arguments"""
-    venv_path = Path(sys.executable).parent.parent
-    tld = task.get("tld", "com")
-    if platform.system() == "Windows":
-        cli_path = venv_path / "Scripts" / "gtts-cli.exe"
-    else:
-        cli_path = venv_path / "bin" / "gtts-cli"
-    
-    if not cli_path.exists():
-        raise RuntimeError(f"gtts-cli not found at {cli_path}")
-    
-    return [
-        str(cli_path),
-        task["content"],
-        "--tld", tld,
-        "--output", task["debug_mp3"]
-    ]
-
-
-def build_edge_command(task: dict) -> list:
-    """Build edge-tts command as a list of arguments"""
-    return [
-        sys.executable, "-m", "edge_tts",
-        "--pitch", f"{task['edgepitch']:+}Hz",
-        "--volume", f"{task['edgevolume']:+}%",
-        "--voice", task["edge_voice"],
-        "--text", task["content"],
-        "--write-media", task["debug_mp3"]
-    ]
 
 
 async def process_queue():
-    global IS_PLAYING, CURRENT_FILE, CURRENT_TASK, QUEUE_LOCK
+    global IS_PLAYING, CURRENT_TASK, QUEUE_LOCK
     if not QUEUE_LOCK:
         print("Queue lock not initialized!")
         return
@@ -702,57 +529,22 @@ async def process_queue():
         voice_client = bot.get_guild(GUILD_ID).voice_client
         if not voice_client or not voice_client.is_connected():
             return
-            #for task, future in tts_queue:
-            #    output_file = task.get("debug_mp3") or task.get("debug_wav")
-            #    if output_file and os.path.exists(output_file):
-            #        try:
-            #            safe_delete(output_file)
-            #            print(f"⚠️ Disconnect cleanup: {output_file}")
-            #        except Exception as e:
-            #            print(f"Disconnect cleanup error: {e}")
-            #tts_queue.clear()
-            #IS_PLAYING = False
-            #return
             
         if tts_queue and not IS_PLAYING:
             IS_PLAYING = True
             task, future = tts_queue.pop(0)
             
             try:
-                await asyncio.sleep(0.05)
+                # await asyncio.sleep(0.05)
                 source = await future
-                CURRENT_FILE = task.get("debug_mp3") or task.get("debug_wav")
                 CURRENT_TASK = task
                 
                 def cleanup(error):
-                    global CURRENT_FILE, CURRENT_TASK, ACTIVE_FILES, IS_PLAYING
-                    file_to_clean = CURRENT_FILE
-                    task_content = CURRENT_TASK["content"][:50] if CURRENT_TASK else "Unknown"
-
-                    CURRENT_FILE = None
-                    CURRENT_TASK = None
+                    global IS_PLAYING
                     IS_PLAYING = False
-
-                    async def async_cleanup():
-                        try:
-                            if file_to_clean:
-                                if safe_delete(file_to_clean):
-                                    print(f"♻️ Cleaned '{task_content}' -> {file_to_clean}")
-                                else:
-                                    print(f"⏳ Retrying cleanup for {file_to_clean}")
-                                    await asyncio.sleep(1)
-                                    safe_delete(file_to_clean)
-                                
-                                async with FILE_LOCK:
-                                    if file_to_clean in ACTIVE_FILES:
-                                        ACTIVE_FILES.remove(file_to_clean)
-                        except Exception as e:
-                            print(f"🚨 Cleanup error: {str(e)}")
-                        finally:
-                            await process_queue()
-
-                    if file_to_clean:
-                        asyncio.run_coroutine_threadsafe(async_cleanup(), bot.loop)
+                    if error:
+                        print(f"Playback error: {str(error)}")
+                    bot.loop.create_task(process_queue())
 
                 try:
                     await asyncio.sleep(0.05)
@@ -950,31 +742,18 @@ def clean_special_content(content: str) -> str:
     return content.strip()
 
 def create_tts_task(content: str, config: dict) -> dict:
-    unique_id = uuid.uuid4().hex
-    service = config.get("service", "edge")
-    
-    task = {
-        "id": unique_id,
+    """Create a TTS task without file references"""
+    return {
+        "id": uuid.uuid4().hex,
         "content": content,
         "user_volume": config.get("volume", 100),
-        "service": service,
+        "service": config.get("service", "edge"),
+        "edge_voice": config.get("selected_edge_voice"),
+        "edgepitch": config.get("edgepitch", 0),
+        "edgevolume": config.get("edgevolume", 0),
+        "tld": config.get("gtts_tld", "com"),
         "retry_count": 0
     }
-    
-    if service == "gtts":
-        task.update({
-            "debug_mp3": f"temp_{unique_id}.mp3",
-            "tld": config.get("gtts_tld", "com")
-        })
-    elif service == "edge":
-        task.update({
-            "debug_mp3": f"temp_{unique_id}.mp3",
-            "edge_voice": config.get("selected_edge_voice"),
-            "edgepitch": config.get("edgepitch", 0),
-            "edgevolume": config.get("edgevolume", 0)
-        })
-    
-    return task
 
 # ----------------------------------
 # Add Acronym Command
@@ -1054,13 +833,6 @@ async def on_voice_state_update(member, before, after):
                 await current_voice_client.disconnect()
                 print("Left voice channel because it became empty.")
                 async with QUEUE_LOCK:
-                    for task, future in tts_queue:
-                        output_file = task.get("debug_mp3") or task.get("debug_wav")
-                        if output_file and os.path.exists(output_file):
-                            try:
-                                safe_delete(output_file)
-                            except Exception as e:
-                                print(f"Error cleaning file: {e}")
                     tts_queue.clear()
 
 async def handle_reconnection_sequence():
@@ -1084,13 +856,6 @@ async def handle_reconnection_sequence():
             LAST_VOICE_CHANNEL = None
             
         async with QUEUE_LOCK:
-            for task, future in tts_queue:
-                output_file = task.get("debug_mp3") or task.get("debug_wav")
-                if output_file and os.path.exists(output_file):
-                    try:
-                        safe_delete(output_file)
-                    except Exception as e:
-                        print(f"Error cleaning file: {e}")
             tts_queue.clear()
 
 
