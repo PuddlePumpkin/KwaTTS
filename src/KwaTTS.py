@@ -618,7 +618,11 @@ async def process_queue():
     global IS_PLAYING, CURRENT_TASK, QUEUE_LOCK
     while True:
         async with QUEUE_LOCK:
-            voice_client = bot.get_guild(GUILD_ID).voice_client
+            
+            guild = bot.get_guild(GUILD_ID)
+
+            voice_client = next((vc for vc in bot.voice_clients if vc.guild.id == guild.id),None) if guild else None
+
             if not voice_client or not voice_client.is_connected() or not tts_queue or IS_PLAYING:
                 await asyncio.sleep(0.1)
                 continue
@@ -704,8 +708,11 @@ async def on_message(message):
 
     if message.channel.id != TEXT_CHANNEL_ID or message.author.bot:
         return
-        
-    voice_client = message.guild.voice_client
+
+    voice_client = next(
+        (vc for vc in bot.voice_clients if vc.guild.id == message.guild.id),
+        None
+    )
     if not (voice_client and voice_client.is_connected()):
         return
 
