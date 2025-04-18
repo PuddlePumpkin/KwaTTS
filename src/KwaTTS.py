@@ -835,7 +835,7 @@ async def on_message(message):
         future = asyncio.create_task(generate_audio(task))
 
         async with QUEUE_LOCK:
-            tts_queue.append(task, future)
+            tts_queue.append((task, future))
             print(f"Task added to queue, length: {len(tts_queue)}")
 
     except Exception as e:
