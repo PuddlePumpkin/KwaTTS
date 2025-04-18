@@ -647,9 +647,7 @@ async def process_queue():
             print(f"Processing task: {task['content'][:50]}...")
 
         try:
-            # Generate audio when processing the task
-            future = asyncio.create_task(generate_audio(task))
-            print(f"Starting audio generation for task: {task['id']}")
+            print(f"Awaiting audio generation for task: {task['id']}")
             source = await asyncio.wait_for(future, timeout=30.0)
             print(f"Audio generated for task: {task['id']}")
             CURRENT_TASK = task
