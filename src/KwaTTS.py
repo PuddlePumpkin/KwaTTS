@@ -619,10 +619,11 @@ async def process_queue():
     while True:
         async with QUEUE_LOCK:
             voice_client = bot.get_guild(GUILD_ID).voice_client
-            if not voice_client or not voice_client.is_connected() or not tts_queue or IS_PLAYING:
+            connected = voice_client and voice_client.is_connected()
+            print(f"Queue state: connected={connected}, queue_len={len(tts_queue)}, IS_PLAYING={IS_PLAYING}")
+            if not connected or not tts_queue or IS_PLAYING:
                 await asyncio.sleep(0.1)
                 continue
-
             IS_PLAYING = True
             task = tts_queue.pop(0)
 
