@@ -617,6 +617,7 @@ async def generate_audio(task: dict) -> discord.AudioSource:
 async def process_queue():
     global IS_PLAYING, CURRENT_TASK, QUEUE_LOCK
     while True:
+        print("process_queue loop running")
         async with QUEUE_LOCK:
             voice_client = bot.get_guild(GUILD_ID).voice_client
             connected = voice_client and voice_client.is_connected()
@@ -626,11 +627,14 @@ async def process_queue():
                 continue
             IS_PLAYING = True
             task = tts_queue.pop(0)
+            print(f"Processing task: {task['content'][:50]}...")
 
         try:
             # Generate audio when processing the task
             future = asyncio.create_task(generate_audio(task))
-            source = await future
+            print(f"Starting audio generation for task: {task['id']}")
+            source = await asyncio.wait_for(future, timeout=30.0)
+            print(f"Audio generated for task: {task['id']}")
             CURRENT_TASK = task
 
             def cleanup(error):
@@ -655,6 +659,9 @@ async def process_queue():
                 if task["retry_count"] < 3:
                     task["retry_count"] += 1
                     tts_queue.insert(0, task)
+        except asyncio.TimeoutError:
+            print(f"Audio generation timed out for task: {task['id']}")
+            raise
         await asyncio.sleep(0.1)
 
 
