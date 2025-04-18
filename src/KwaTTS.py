@@ -509,7 +509,7 @@ async def clearqueue(interaction: discord.Interaction):
 
 
 async def generate_audio(task: dict) -> discord.AudioSource:
-    """Generate audio with streaming optimization"""
+    """Generate audio with buffering optimization for Edge TTS"""
     proc = None
     try:
         start_time = time.time()
@@ -539,6 +539,7 @@ async def generate_audio(task: dict) -> discord.AudioSource:
         if proc.stdin is None or proc.stdout is None:
             raise RuntimeError("FFmpeg streams not initialized")
         print("Starting TTS conversion")
+
         if service == "gtts":
             # Google TTS (single write)
             tts = gTTS(
@@ -550,7 +551,7 @@ async def generate_audio(task: dict) -> discord.AudioSource:
                 tts.write_to_fp(mp3_buffer)
                 mp3_buffer.seek(0)
                 audio_data = mp3_buffer.read()
-                
+
                 try:
                     stdout, stderr = await asyncio.wait_for(
                         proc.communicate(input=audio_data),
@@ -561,7 +562,7 @@ async def generate_audio(task: dict) -> discord.AudioSource:
                     raise RuntimeError("gTTS processing timed out")
 
         elif service == "edge":
-            # Edge TTS (streaming)
+            # Edge TTS (non-streaming buffer)
             communicate = edge_tts.Communicate(
                 text=task["content"],
                 voice=task["edge_voice"],
@@ -570,26 +571,26 @@ async def generate_audio(task: dict) -> discord.AudioSource:
             )
 
             try:
-                # Stream audio to FFmpeg
+                # Get the full audio data
+                audio_data = b""
                 async for chunk in communicate.stream():
-                    if chunk["type"] == "audio":
-                        proc.stdin.write(chunk["data"])
-                        await proc.stdin.drain()
+                     if chunk["type"] == "audio":
+                        audio_data += chunk["data"]
 
-                # Close stdin properly
-                if not proc.stdin.is_closing():
-                    proc.stdin.close()
-                    await proc.stdin.wait_closed()
+                # Pass the full audio data to FFmpeg
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(input=audio_data),
+                    timeout=30
+                )
 
             except asyncio.TimeoutError:
                 await proc.kill()
-                raise RuntimeError("Edge TTS streaming timed out")
+                raise RuntimeError("Edge TTS generation timed out")
+            except Exception as e:
+                # Catch other potential errors during generation
+                raise RuntimeError(f"Edge TTS generation failed: {e}")
 
-            # Get output
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=30
-            )
+
         print("TTS conversion completed")
 
         # Error checking
@@ -603,16 +604,30 @@ async def generate_audio(task: dict) -> discord.AudioSource:
         print(f"Generation error: {str(e)}")
         if proc:
             try:
-                await proc.kill()
-            except:
-                pass
-        raise
+                # Ensure FFmpeg process is terminated on error
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=5) # Wait for termination
+            except (ProcessLookupError, asyncio.TimeoutError):
+                 # If terminate fails or times out, try killing
+                 try:
+                     proc.kill()
+                     await asyncio.wait_for(proc.wait(), timeout=5)
+                 except (ProcessLookupError, asyncio.TimeoutError):
+                     pass # Process is likely already gone
+
+        raise # Re-raise the exception after cleanup
     finally:
-        if proc:
-            try:
-                await proc.wait()
-            except:
-                pass
+        if proc and proc.returncode is None: # Check if process is still running
+             try:
+                 proc.terminate()
+                 await asyncio.wait_for(proc.wait(), timeout=5)
+             except (ProcessLookupError, asyncio.TimeoutError):
+                 try:
+                     proc.kill()
+                     await asyncio.wait_for(proc.wait(), timeout=5)
+                 except (ProcessLookupError, asyncio.TimeoutError):
+                     pass
+
         print(f"Audio generation took: {time.time() - start_time:.2f}s")
 
 
