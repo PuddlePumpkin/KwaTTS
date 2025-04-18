@@ -643,7 +643,7 @@ async def process_queue():
                 await asyncio.sleep(0.1)
                 continue
             IS_PLAYING = True
-            task = tts_queue.pop(0)
+            task, future = tts_queue.pop(0)
             print(f"Processing task: {task['content'][:50]}...")
 
         try:
@@ -830,8 +830,12 @@ async def on_message(message):
             return
 
         task = create_tts_task(final_content, userconfig)
+
+        # Create audio generation future immediately
+        future = asyncio.create_task(generate_audio(task))
+
         async with QUEUE_LOCK:
-            tts_queue.append(task)
+            tts_queue.append(task, future)
             print(f"Task added to queue, length: {len(tts_queue)}")
 
     except Exception as e:
