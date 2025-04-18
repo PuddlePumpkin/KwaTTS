@@ -519,6 +519,7 @@ async def generate_audio(task: dict) -> discord.AudioSource:
         # Common FFmpeg command
         ffmpeg_command = [
             'ffmpeg', '-nostdin', '-y',
+            '-f', 'mp3'
             '-i', 'pipe:0',
             '-af', f'volume={volume}',
             '-f', 's16le',
