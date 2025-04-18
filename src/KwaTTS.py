@@ -634,11 +634,11 @@ async def generate_audio(task: dict) -> discord.AudioSource:
 async def process_queue():
     global IS_PLAYING, CURRENT_TASK, QUEUE_LOCK
     while True:
-        print("process_queue loop running")
+        #DEBUG print("process_queue loop running")
         async with QUEUE_LOCK:
             voice_client = bot.get_guild(GUILD_ID).voice_client
             connected = voice_client and voice_client.is_connected()
-            print(f"Queue state: connected={connected}, queue_len={len(tts_queue)}, IS_PLAYING={IS_PLAYING}")
+            #DEBUG print(f"Queue state: connected={connected}, queue_len={len(tts_queue)}, IS_PLAYING={IS_PLAYING}")
             if not connected or not tts_queue or IS_PLAYING:
                 await asyncio.sleep(0.1)
                 continue
