@@ -618,15 +618,10 @@ async def process_queue():
     global IS_PLAYING, CURRENT_TASK, QUEUE_LOCK
     while True:
         async with QUEUE_LOCK:
-
-            guild = bot.get_guild(GUILD_ID)
-
-            voice_client = next((vc for vc in bot.voice_clients if vc.guild.id == guild.id),None) if guild else None
-            print(f"Voice client status in process_queue: {voice_client and voice_client.is_connected()}")
+            voice_client = bot.get_guild(GUILD_ID).voice_client
             if not voice_client or not voice_client.is_connected() or not tts_queue or IS_PLAYING:
                 await asyncio.sleep(0.1)
                 continue
-
 
             IS_PLAYING = True
             task = tts_queue.pop(0)
@@ -639,9 +634,11 @@ async def process_queue():
 
             def cleanup(error):
                 global IS_PLAYING
-                IS_PLAYING = False
                 if error:
-                    print(f"Playback error: {str(error)}")
+                    print(f"Playback stopped with error: {error}")
+                else:
+                    print("Playback finished normally")
+                IS_PLAYING = False
 
             voice_client.play(source, after=cleanup)
             print(f"Now playing: \"{task['content'][:50]}\"...")
@@ -701,21 +698,25 @@ def contains_code_block(content: str) -> bool:
 
 @bot.event
 async def on_message(message):
+
     global QUEUE_LOCK
 
+    print(f"Received message from {message.author} in channel {message.channel.id}: {message.content}")
     if not QUEUE_LOCK:
         print("Queue lock not initialized!")
+        return
+    if message.channel.id != TEXT_CHANNEL_ID or message.author.bot:
+        print("Message skipped: wrong channel or bot author")
+        return
+    voice_client = message.guild.voice_client
+    if not (voice_client and voice_client.is_connected()):
+        print("Message skipped: bot not connected to voice")
         return
 
     if message.channel.id != TEXT_CHANNEL_ID or message.author.bot:
         return
-
-    voice_client = next(
-        (vc for vc in bot.voice_clients if vc.guild.id == message.guild.id),
-        None
-    )
-    # In on_message after retrieving voice_client
-    print(f"Voice client status in on_message: {voice_client and voice_client.is_connected()}")
+        
+    voice_client = message.guild.voice_client
     if not (voice_client and voice_client.is_connected()):
         return
 
@@ -806,6 +807,7 @@ async def on_message(message):
         task = create_tts_task(final_content, userconfig)
         async with QUEUE_LOCK:
             tts_queue.append(task)
+            print(f"Task added to queue, length: {len(tts_queue)}")
 
     except Exception as e:
         print(f"Message processing error: {str(e)}")
