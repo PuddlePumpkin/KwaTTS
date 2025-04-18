@@ -40,31 +40,25 @@ VOICE_STATE_LOCK = None
 CURRENT_TASK = None
 keepalive_task = None
 
+# Enhanced graceful shutdown to cancel all tasks
 async def graceful_shutdown(signame=None):
-    """Handle all shutdown tasks properly"""
-    global QUEUE_LOCK
-    print(f"\nInitiating graceful shutdown ({signame if signame else 'manual'})...")
+    """Handle shutdown by cancelling all tasks"""
+    print(f"\nShutting down ({signame if signame else 'manual'})...")
     
-    # Cleanup queued files
-    if not QUEUE_LOCK:  # Safety check
-        print("Queue lock not initialized!")
-        return
-    async with QUEUE_LOCK:
-        tts_queue.clear()
+    # Cancel all ongoing tasks
+    tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+    for task in tasks:
+        task.cancel()
     
-    # Disconnect from all voice channels
+    # Wait for tasks to handle cancellation
+    await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Cleanup voice clients
     for guild in bot.guilds:
-        voice_client = guild.voice_client
-        if voice_client and voice_client.is_connected():
-            await voice_client.disconnect()
-            print(f"Disconnected from voice in {guild.name}")
+        if guild.voice_client:
+            await guild.voice_client.disconnect()
     
-    # Close Discord connection
-    if not bot.is_closed():
-        await bot.close()
-        print("Closed Discord connection")
-    
-    # Exit the program
+    await bot.close()
     sys.exit(0)
 
 def setup_signal_handlers():
@@ -449,11 +443,13 @@ async def leave(interaction: discord.Interaction):
 # ----------------------------------
 @bot.event
 async def on_ready():
-    global VOICE_STATE_LOCK, QUEUE_LOCK
-    # Initialize locks after event loop is running
+    global VOICE_STATE_LOCK, QUEUE_LOCK, process_task
     VOICE_STATE_LOCK = asyncio.Lock()
     QUEUE_LOCK = asyncio.Lock()
-
+    
+    # Start the process_queue loop
+    process_task = bot.loop.create_task(process_queue())
+    
     print(f'Bot ready: {bot.user}')
     setup_signal_handlers()
     try:
@@ -620,7 +616,7 @@ async def generate_audio(task: dict) -> discord.AudioSource:
 
 async def process_queue():
     global IS_PLAYING, CURRENT_TASK, QUEUE_LOCK
-    while True:  # Continuous processing loop
+    while True:
         async with QUEUE_LOCK:
             voice_client = bot.get_guild(GUILD_ID).voice_client
             if not voice_client or not voice_client.is_connected() or not tts_queue or IS_PLAYING:
@@ -628,10 +624,11 @@ async def process_queue():
                 continue
 
             IS_PLAYING = True
-            task, future = tts_queue.pop(0)
+            task = tts_queue.pop(0)
 
         try:
-            # Wait for the audio to be generated (non-blocking for other tasks)
+            # Generate audio when processing the task
+            future = asyncio.create_task(generate_audio(task))
             source = await future
             CURRENT_TASK = task
 
@@ -640,11 +637,13 @@ async def process_queue():
                 IS_PLAYING = False
                 if error:
                     print(f"Playback error: {str(error)}")
-                bot.loop.create_task(process_queue())
 
             voice_client.play(source, after=cleanup)
             print(f"Now playing: \"{task['content'][:50]}\"...")
 
+        except asyncio.CancelledError:
+            # Handle cancellation during shutdown
+            raise
         except Exception as e:
             print(f"Error processing task: {str(e)}")
             traceback.print_exc()
@@ -652,11 +651,9 @@ async def process_queue():
                 IS_PLAYING = False
                 if task["retry_count"] < 3:
                     task["retry_count"] += 1
-                    new_future = asyncio.create_task(generate_audio(task))
-                    new_future.add_done_callback(lambda f: bot.loop.create_task(process_queue()))
-                    tts_queue.insert(0, (task, new_future))
-
+                    tts_queue.insert(0, task)
         await asyncio.sleep(0.1)
+
 
 def filter_acronyms(content: str) -> str:
     global ACRONYM_CACHE, ACRONYM_LAST_MODIFIED
@@ -797,13 +794,8 @@ async def on_message(message):
             return
 
         task = create_tts_task(final_content, userconfig)
-        future = asyncio.create_task(generate_audio(task))
-        future.add_done_callback(lambda f: bot.loop.create_task(process_queue()))  # Add callback
-        
         async with QUEUE_LOCK:
-            tts_queue.append((task, future))
-        
-        await process_queue()
+            tts_queue.append(task)
 
     except Exception as e:
         print(f"Message processing error: {str(e)}")
@@ -938,7 +930,11 @@ async def handle_reconnection_sequence():
     print("Starting reconnection sequence...")
     success = await attempt_reconnection()
     if success:
-        await process_queue()  # Process pending tasks after reconnecting
+        # Removed the call to await process_queue() here.
+        # The main process_queue loop (started in on_ready)
+        # will automatically resume processing the queue now that
+        # the bot is reconnected.
+        print("Reconnection successful, main queue process will resume.")
     if not success:
         # Notify in text channel
         channel = bot.get_channel(TEXT_CHANNEL_ID)
