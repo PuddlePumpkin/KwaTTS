@@ -537,7 +537,7 @@ async def generate_audio(task: dict) -> discord.AudioSource:
         # Check if streams are available
         if proc.stdin is None or proc.stdout is None:
             raise RuntimeError("FFmpeg streams not initialized")
-
+        print("Starting TTS conversion")
         if service == "gtts":
             # Google TTS (single write)
             tts = gTTS(
@@ -589,6 +589,7 @@ async def generate_audio(task: dict) -> discord.AudioSource:
                 proc.communicate(),
                 timeout=30
             )
+        print("TTS conversion completed")
 
         # Error checking
         if proc.returncode != 0:
