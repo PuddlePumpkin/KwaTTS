@@ -728,15 +728,17 @@ async def on_message(message):
     if not QUEUE_LOCK:
         print("Queue lock not initialized!")
         return
-    if message.channel.id != TEXT_CHANNEL_ID or message.author.bot:
-        print("Message skipped: wrong channel or bot author")
+    # Allow messages from bots that are not this bot
+    is_self = message.author.id == bot.user.id
+    if message.channel.id != TEXT_CHANNEL_ID or is_self:
+        print("Message skipped: wrong channel or self message")
         return
     voice_client = message.guild.voice_client
     if not (voice_client and voice_client.is_connected()):
         print("Message skipped: bot not connected to voice")
         return
 
-    if message.channel.id != TEXT_CHANNEL_ID or message.author.bot:
+    if message.channel.id != TEXT_CHANNEL_ID:
         return
         
     voice_client = message.guild.voice_client
